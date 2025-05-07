@@ -848,5 +848,16 @@ def ConvertAIGToComb: Pass<"convert-aig-to-comb", "hw::HWModuleOp"> {
   ];
 }
 
+//===----------------------------------------------------------------------===//
+// ConvertCombToDatapath
+//===----------------------------------------------------------------------===//
+
+def ConvertCombToDatapath: Pass<"convert-comb-to-datapath",  "hw::HWModuleOp"> {
+  let summary = "Lower Comb ops to Datapath ops.";
+  let dependentDialects = [
+    "circt::comb::CombDialect",
+    "circt::datapath::DatapathDialect",
+  ];
+}
 
 #endif // CIRCT_CONVERSION_PASSES_TD
