@@ -30,6 +30,13 @@ using namespace comb;
 // Utility Functions
 //===----------------------------------------------------------------------===//
 
+// A wrapper for comb::extractBits that returns a SmallVector<Value>.
+static SmallVector<Value> extractBits(OpBuilder &builder, Value val) {
+  SmallVector<Value> bits;
+  comb::extractBits(builder, val, bits);
+  return bits;
+}
+
 //===----------------------------------------------------------------------===//
 // Conversion patterns
 //===----------------------------------------------------------------------===//
@@ -118,50 +125,50 @@ struct CombAddOpConversion : OpConversionPattern<AddOp> {
 //   }
 // };
 
-// struct CombMulOpConversion : OpConversionPattern<MulOp> {
-//   using OpConversionPattern<MulOp>::OpConversionPattern;
-//   using OpAdaptor = typename OpConversionPattern<MulOp>::OpAdaptor;
-//   LogicalResult
-//   matchAndRewrite(MulOp op, OpAdaptor adaptor,
-//                   ConversionPatternRewriter &rewriter) const override {
-//     if (adaptor.getInputs().size() != 2)
-//       return failure();
-// 
-//     // FIXME: Currently it's lowered to a really naive implementation that
-//     // chains add operations.
-// 
-//     // a_{n}a_{n-1}...a_0 * b
-//     // = sum_{i=0}^{n} a_i * 2^i * b
-//     // = sum_{i=0}^{n} (a_i ? b : 0) << i
-//     int64_t width = op.getType().getIntOrFloatBitWidth();
-//     auto aBits = extractBits(rewriter, adaptor.getInputs()[0]);
-//     SmallVector<Value> results;
-//     auto rhs = op.getInputs()[1];
-//     auto zero = rewriter.create<hw::ConstantOp>(op.getLoc(),
-//                                                 llvm::APInt::getZero(width));
-//     for (int64_t i = 0; i < width; ++i) {
-//       auto aBit = aBits[i];
-//       auto andBit =
-//           rewriter.createOrFold<comb::MuxOp>(op.getLoc(), aBit, rhs, zero);
-//       auto upperBits = rewriter.createOrFold<comb::ExtractOp>(
-//           op.getLoc(), andBit, 0, width - i);
-//       if (i == 0) {
-//         results.push_back(upperBits);
-//         continue;
-//       }
-// 
-//       auto lowerBits =
-//           rewriter.create<hw::ConstantOp>(op.getLoc(), APInt::getZero(i));
-// 
-//       auto shifted = rewriter.createOrFold<comb::ConcatOp>(
-//           op.getLoc(), op.getType(), ValueRange{upperBits, lowerBits});
-//       results.push_back(shifted);
-//     }
-// 
-//     rewriter.replaceOpWithNewOp<comb::AddOp>(op, results, true);
-//     return success();
-//   }
-// };
+struct CombMulOpConversion : OpConversionPattern<MulOp> {
+  using OpConversionPattern<MulOp>::OpConversionPattern;
+  using OpAdaptor = typename OpConversionPattern<MulOp>::OpAdaptor;
+  LogicalResult
+  matchAndRewrite(MulOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    if (adaptor.getInputs().size() != 2)
+      return failure();
+
+    // FIXME: Currently it's lowered to a really naive implementation that
+    // chains add operations.
+
+    // a_{n}a_{n-1}...a_0 * b
+    // = sum_{i=0}^{n} a_i * 2^i * b
+    // = sum_{i=0}^{n} (a_i ? b : 0) << i
+    int64_t width = op.getType().getIntOrFloatBitWidth();
+    auto aBits = extractBits(rewriter, adaptor.getInputs()[0]);
+    SmallVector<Value> results;
+    auto rhs = op.getInputs()[1];
+    auto zero = rewriter.create<hw::ConstantOp>(op.getLoc(),
+                                                llvm::APInt::getZero(width));
+    for (int64_t i = 0; i < width; ++i) {
+      auto aBit = aBits[i];
+      auto andBit =
+          rewriter.createOrFold<comb::MuxOp>(op.getLoc(), aBit, rhs, zero);
+      auto upperBits = rewriter.createOrFold<comb::ExtractOp>(
+          op.getLoc(), andBit, 0, width - i);
+      if (i == 0) {
+        results.push_back(upperBits);
+        continue;
+      }
+
+      auto lowerBits =
+          rewriter.create<hw::ConstantOp>(op.getLoc(), APInt::getZero(i));
+
+      auto shifted = rewriter.createOrFold<comb::ConcatOp>(
+          op.getLoc(), op.getType(), ValueRange{upperBits, lowerBits});
+      results.push_back(shifted);
+    }
+
+    rewriter.replaceOpWithNewOp<comb::AddOp>(op, results, true);
+    return success();
+  }
+};
 
 
 } // namespace
@@ -182,7 +189,7 @@ static void
 populateCombToDatapathConversionPatterns(RewritePatternSet &patterns) {
   patterns.add<
       // Arithmetic Ops
-      CombAddOpConversion
+      CombAddOpConversion, CombMulOpConversion
       >
       (patterns.getContext());
 }
@@ -197,7 +204,7 @@ void ConvertCombToDatapathPass::runOnOperation() {
   // Datapath is target dialect.
   target.addLegalDialect<datapath::DatapathDialect, comb::CombDialect>();
 
-  target.addIllegalOp<comb::AddOp>();
+  target.addIllegalOp<comb::AddOp, comb::MulOp>();
 
   target.addDynamicallyLegalOp<comb::AddOp>([](comb::AddOp op) {
     return op.getInputs().size() == 2;
