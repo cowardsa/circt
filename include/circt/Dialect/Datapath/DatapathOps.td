@@ -44,8 +44,6 @@ def CompressOp : DatapathOp<"compress", [Pure, SameTypeOperands, SameOperandsAnd
     OpBuilder<(ins "ValueRange":$lhs, "int32_t":$targetRows), [{
       auto inputType = lhs.front().getType();
       SmallVector<Type> resultTypes(targetRows, inputType);
-      // for (auto i=0; i< targetRows; ++i) 
-      //   resultTypes.push_back(inputType);
       return build($_builder, $_state, resultTypes, lhs);
     }]>
   ];
