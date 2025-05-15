@@ -13,10 +13,12 @@
 //===----------------------------------------------------------------------===//
 
 #include "circt/Conversion/CombToSMT.h"
+#include "circt/Conversion/DatapathToSMT.h"
 #include "circt/Conversion/HWToSMT.h"
 #include "circt/Conversion/SMTToZ3LLVM.h"
 #include "circt/Conversion/VerifToSMT.h"
 #include "circt/Dialect/Comb/CombDialect.h"
+#include "circt/Dialect/Datapath/DatapathDialect.h"
 #include "circt/Dialect/Emit/EmitDialect.h"
 #include "circt/Dialect/Emit/EmitPasses.h"
 #include "circt/Dialect/HW/HWDialect.h"
@@ -233,7 +235,9 @@ static LogicalResult executeLEC(MLIRContext &context) {
     pm.addPass(createConstructLEC(opts));
   }
   pm.addPass(createConvertHWToSMT());
+  pm.addPass(createConvertDatapathToSMT());
   pm.addPass(createConvertCombToSMT());
+  
   pm.addPass(createConvertVerifToSMT());
   pm.addPass(createSimpleCanonicalizerPass());
 
@@ -370,6 +374,7 @@ int main(int argc, char **argv) {
   // clang-format off
   registry.insert<
     circt::comb::CombDialect,
+    circt::datapath::DatapathDialect,
     circt::emit::EmitDialect,
     circt::hw::HWDialect,
     circt::om::OMDialect,
