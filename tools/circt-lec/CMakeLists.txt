@@ -36,6 +36,7 @@ target_link_libraries(circt-lec
   MLIRLLVMToLLVMIRTranslation
   MLIRSMT
   MLIRTargetLLVMIRExport
+  MLIRExportSMTLIB
 
   ${CIRCT_LEC_JIT_DEPS}
 )
