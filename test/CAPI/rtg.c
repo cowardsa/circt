@@ -138,17 +138,26 @@ static void testLabelVisibilityAttr(MlirContext ctx) {
   }
 }
 
-static void testDefaultContextAttr(MlirContext ctx) {
+static void testContextAttrs(MlirContext ctx) {
   MlirType cpuTy = rtgtestCPUTypeGet(ctx);
-  MlirAttribute defaultCtxtAttr = rtgDefaultContextAttrGet(ctx, cpuTy);
 
+  // DefaultContext
+  MlirAttribute defaultCtxtAttr = rtgDefaultContextAttrGet(ctx, cpuTy);
   // CHECK: is_default_context
   fprintf(stderr, rtgAttrIsADefaultContextAttr(defaultCtxtAttr)
                       ? "is_default_context\n"
                       : "isnot_default_context\n");
-
   // CHECK: !rtgtest.cpu
   mlirTypeDump(mlirAttributeGetType(defaultCtxtAttr));
+
+  // AnyContext
+  MlirAttribute anyCtxtAttr = rtgAnyContextAttrGet(ctx, cpuTy);
+  // CHECK: is_any_context
+  fprintf(stderr, rtgAttrIsAAnyContextAttr(anyCtxtAttr)
+                      ? "is_any_context\n"
+                      : "isnot_any_context\n");
+  // CHECK: !rtgtest.cpu
+  mlirTypeDump(mlirAttributeGetType(anyCtxtAttr));
 }
 
 static void testImmediate(MlirContext ctx) {
@@ -175,6 +184,29 @@ static void testImmediate(MlirContext ctx) {
           rtgImmediateAttrGetValue(immediateAttr));
 }
 
+static void testMemories(MlirContext ctx) {
+  MlirType memoryBlockTy = rtgMemoryBlockTypeGet(ctx, 32);
+
+  // CHECK: is_memory_block
+  fprintf(stderr, rtgTypeIsAMemoryBlock(memoryBlockTy)
+                      ? "is_memory_block\n"
+                      : "isnot_memory_block\n");
+  // CHECK: !rtg.isa.memory_block<32>
+  mlirTypeDump(memoryBlockTy);
+  // CHECK: address_width=32
+  fprintf(stderr, "address_width=%u\n",
+          rtgMemoryBlockTypeGetAddressWidth(memoryBlockTy));
+
+  MlirType memoryTy = rtgMemoryTypeGet(ctx, 32);
+  // CHECK: is_memory
+  fprintf(stderr,
+          rtgTypeIsAMemory(memoryTy) ? "is_memory\n" : "isnot_memory\n");
+  // CHECK: addressWidth=32
+  fprintf(stderr, "addressWidth=%u\n", rtgMemoryTypeGetAddressWidth(memoryTy));
+  // CHECK: !rtg.isa.memory<32>
+  mlirTypeDump(memoryTy);
+}
+
 int main(int argc, char **argv) {
   MlirContext ctx = mlirContextCreate();
   mlirDialectHandleLoadDialect(mlirGetDialectHandle__rtg__(), ctx);
@@ -189,8 +221,9 @@ int main(int argc, char **argv) {
   testArrayType(ctx);
 
   testLabelVisibilityAttr(ctx);
-  testDefaultContextAttr(ctx);
+  testContextAttrs(ctx);
   testImmediate(ctx);
+  testMemories(ctx);
 
   mlirContextDestroy(ctx);
 

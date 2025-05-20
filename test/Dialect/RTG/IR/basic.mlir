@@ -9,6 +9,9 @@ rtg.test @constants() {
   // CHECK-NEXT: rtg.isa.int_to_immediate [[V0]] : !rtg.isa.immediate<32>
   %1 = index.constant 5
   %2 = rtg.isa.int_to_immediate %1 : !rtg.isa.immediate<32>
+
+  // CHECK-NEXT: rtg.comment "this is a comment"
+  rtg.comment "this is a comment"
 }
 
 // CHECK-LABEL: rtg.sequence @ranomizedSequenceType
@@ -136,6 +139,9 @@ rtg.test @contexts(ctxt0 = %ctxt0: !rtgtest.cpu) {
   // CHECK: rtg.on_context {{%.+}}, {{%.+}} : !rtgtest.cpu
   %seq = rtg.get_sequence @seq0 : !rtg.sequence
   rtg.on_context %ctxt0, %seq : !rtgtest.cpu
+
+  // CHECK: rtg.constant #rtg.any_context : !rtgtest.cpu
+  rtg.constant #rtg.any_context : !rtgtest.cpu
 }
 
 // CHECK-LABEL: rtg.test @test0
@@ -187,4 +193,21 @@ rtg.test @tuples() {
   %true = index.bool.constant true
   %0 = rtg.tuple_create %idx0, %true : index, i1
   %1 = rtg.tuple_extract %0 at 1 : tuple<index, i1>
+}
+
+// CHECK-LABEL: @memoryBlocks : !rtg.dict<mem_base_address: !rtg.isa.immediate<32>, mem_block: !rtg.isa.memory_block<32>, mem_size: index>
+rtg.target @memoryBlocks : !rtg.dict<mem_base_address: !rtg.isa.immediate<32>, mem_block: !rtg.isa.memory_block<32>, mem_size: index> {
+  // CHECK: rtg.isa.memory_block_declare [0x0 - 0x8] : !rtg.isa.memory_block<32>
+  %0 = rtg.isa.memory_block_declare [0x0 - 0x8] : !rtg.isa.memory_block<32>
+
+  // CHECK: [[IDX8:%.+]] = index.constant 8
+  // CHECK: [[V1:%.+]] = rtg.isa.memory_alloc %0, [[IDX8]], [[IDX8]] : !rtg.isa.memory_block<32>
+  // CHECK: [[V2:%.+]] = rtg.isa.memory_base_address [[V1]] : !rtg.isa.memory<32>
+  // CHECK: [[V3:%.+]] = rtg.isa.memory_size [[V1]] : !rtg.isa.memory<32>
+  %idx8 = index.constant 8
+  %1 = rtg.isa.memory_alloc %0, %idx8, %idx8 : !rtg.isa.memory_block<32>
+  %2 = rtg.isa.memory_base_address %1 : !rtg.isa.memory<32>
+  %3 = rtg.isa.memory_size %1 : !rtg.isa.memory<32>
+  
+  rtg.yield %2, %0, %3 : !rtg.isa.immediate<32>, !rtg.isa.memory_block<32>, index
 }

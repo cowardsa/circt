@@ -137,7 +137,10 @@ class System:
   #     "canonicalize",
   # ]
 
-  def import_mlir(self, module, lowering=None) -> Dict[str, Any]:
+  def import_mlir(self,
+                  module,
+                  lowering=None,
+                  output_filename: Optional[str] = None) -> Dict[str, Any]:
     """Import mlir asm created elsewhere into our space."""
 
     compat_mod = ir.Module.parse(str(module))
@@ -149,7 +152,7 @@ class System:
       # TODO: handle symbolrefs pointing to potentially renamed symbols.
       if isinstance(op, (hw.HWModuleOp, hw.HWModuleExternOp)):
         from .module import import_hw_module
-        im = import_hw_module(op)
+        im = import_hw_module(self, op)
         self._create_circt_mod(im._builder)
         ret[ir.StringAttr(op.name).value] = im
       elif isinstance(op, esi.RandomAccessMemoryDeclOp):
@@ -162,6 +165,9 @@ class System:
           ret[ir.StringAttr(op.attributes["sym_name"]).value] = op
         # TODO: do symbol renaming.
         self.body.append(op)
+      if output_filename is not None and not isinstance(op, hw.TypeScopeOp):
+        op.attributes["output_file"] = hw.OutputFileAttr.get_from_filename(
+            ir.StringAttr.get(output_filename), False, True)
     return ret
 
   def create_physical_region(self, name: str = None):
@@ -284,8 +290,12 @@ class System:
       "builtin.module(lower-esi-to-hw{{platform={platform}}})",
       "builtin.module(convert-fsm-to-sv)",
       "builtin.module(lower-hwarith-to-hw)",
+      "builtin.module(hw.module(lower-seq-fifo))",
+      "builtin.module(hw.module(lower-seq-hlmem))",
       "builtin.module(lower-seq-to-sv)",
+      "builtin.module(hw.module(lower-hw-to-sv))",
       "builtin.module(lower-comb)",
+      "builtin.module(hw.module(lower-verif-to-sv))",
       "builtin.module(cse, canonicalize, cse)",
       "builtin.module(hw.module(prettify-verilog), hw.module(hw-cleanup))",
       "builtin.module(msft-export-tcl{{tops={tops} tcl-file={tcl_file}}})"

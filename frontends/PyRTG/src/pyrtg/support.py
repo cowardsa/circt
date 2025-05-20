@@ -2,7 +2,7 @@
 #  See https://llvm.org/LICENSE.txt for license information.
 #  SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
-from .circt import support, ir
+from .base import support, ir
 from .core import Value
 
 
@@ -37,12 +37,21 @@ def _FromCirctValue(value: ir.Value) -> Value:
   if isinstance(type, rtgtest.IntegerRegisterType):
     from .resources import IntegerRegister
     return IntegerRegister(value)
+  if isinstance(type, rtgtest.CPUType):
+    from .contexts import CPUCore
+    return CPUCore(value)
   if isinstance(type, rtg.ImmediateType):
     from .resources import Immediate
     return Immediate(type.width, value)
   if isinstance(type, ir.TupleType):
     from .tuples import Tuple
     return Tuple(value)
+  if isinstance(type, rtg.MemoryType):
+    from .memories import Memory
+    return Memory(value)
+  if isinstance(type, rtg.MemoryBlockType):
+    from .memories import MemoryBlock
+    return MemoryBlock(value)
   assert False, "Unsupported value"
 
 

@@ -524,7 +524,7 @@ rtg.sequence @switchCpuSeq(%parent: !rtgtest.cpu, %child: !rtgtest.cpu, %seq: !r
 // CHECK:  rtg.sequence @switchNestedCpuSeq_0() {
 // CHECK-NEXT:    [[L12:%.+]] = rtg.label_decl "label7"
 // CHECK-NEXT:    rtg.label local [[L12]]
-// CHECK-NEXT:    [[SEQ8:%.+]] = rtg.get_sequence @nestedCpuSeq_0 : !rtg.sequence
+// CHECK-NEXT:    [[SEQ8:%.+]] = rtg.get_sequence @nestedCpuSeq{{.*}} : !rtg.sequence
 // CHECK-NEXT:    [[SEQ9:%.+]] = rtg.randomize_sequence [[SEQ8]]
 // CHECK-NEXT:    rtg.embed_sequence [[SEQ9]]
 // CHECK-NEXT:    [[L13:%.+]] = rtg.label_decl "label8"
@@ -540,8 +540,22 @@ rtg.sequence @switchNestedCpuSeq(%parent: !rtgtest.cpu, %child: !rtgtest.cpu, %s
 }
 
 rtg.target @singleCoreTarget : !rtg.dict<single_core: !rtgtest.cpu> {
+  %0 = rtg.get_sequence @switchCpuSeq : !rtg.sequence<!rtgtest.cpu, !rtgtest.cpu, !rtg.sequence>
+  %1 = rtg.get_sequence @switchNestedCpuSeq : !rtg.sequence<!rtgtest.cpu, !rtgtest.cpu, !rtg.sequence>
+  rtg.context_switch #rtg.any_context : !rtgtest.cpu -> #rtg.any_context : !rtgtest.cpu, %1 : !rtg.sequence<!rtgtest.cpu, !rtgtest.cpu, !rtg.sequence>
+  rtg.context_switch #rtg.default : !rtgtest.cpu -> #rtg.any_context : !rtgtest.cpu, %0 : !rtg.sequence<!rtgtest.cpu, !rtgtest.cpu, !rtg.sequence>
   %2 = rtg.constant #rtgtest.cpu<0>
   rtg.yield %2 : !rtgtest.cpu
+}
+
+// CHECK-LABEL: rtg.test @anyContextSwitch_singleCoreTarget
+rtg.test @anyContextSwitch(single_core = %single_core: !rtgtest.cpu) {
+  // CHECK-NEXT: [[V0:%.+]] = rtg.get_sequence @switchCpuSeq{{.*}} : !rtg.sequence
+  // CHECK-NEXT: [[V1:%.+]] = rtg.randomize_sequence [[V0]]
+  // CHECK-NEXT: rtg.embed_sequence [[V1]]
+  // CHECK-NEXT: }
+  %0 = rtg.get_sequence @nestedCpuSeq : !rtg.sequence
+  rtg.on_context %single_core, %0 : !rtgtest.cpu
 }
 
 rtg.sequence @interleaveSequencesSeq0() {
@@ -637,6 +651,22 @@ rtg.test @useFolders(single_core = %single_core: !rtgtest.cpu) {
   // CHECK-NEXT: call @dummy2
   %0 = rtgtest.get_hartid %single_core
   func.call @dummy2(%0) : (index) -> ()
+}
+
+// CHECK-LABEL: rtg.test @comments
+rtg.test @comments() {
+  // CHECK-NEXT: rtg.comment "this is a comment"
+  rtg.comment "this is a comment"
+}
+
+rtg.target @memoryBlocks : !rtg.dict<mem_block: !rtg.isa.memory_block<32>> {
+  %0 = rtg.isa.memory_block_declare [0x0 - 0x8] : !rtg.isa.memory_block<32>
+  rtg.yield %0 : !rtg.isa.memory_block<32>
+}
+
+// CHECK-LABEL: @memoryBlockTest_memoryBlocks
+rtg.test @memoryBlockTest(mem_block = %arg0: !rtg.isa.memory_block<32>) {
+  // CHECK-NEXT: }
 }
 
 // -----

@@ -228,24 +228,27 @@ class TypeAlias(Type):
     if TypeAlias.RegisteredAliases is None:
       return
 
+    guard_name = "__PYCDE_TYPES__"
+    type_scope_attr = ir.StringAttr.get(TypeAlias.TYPE_SCOPE)
     type_scopes = list()
     for op in mod.body.operations:
-      if isinstance(op, hw.TypeScopeOp):
+      if isinstance(op, hw.TypeScopeOp) and op.sym_name == type_scope_attr:
         type_scopes.append(op)
         continue
       if isinstance(op, sv.IfDefOp):
         if len(op.elseRegion.blocks) == 0:
           continue
-        for ifdef_op in op.elseRegion.blocks[0]:
-          if isinstance(ifdef_op, hw.TypeScopeOp):
-            type_scopes.append(ifdef_op)
+        for else_block_op in op.elseRegion.blocks[0]:
+          if isinstance(
+              else_block_op,
+              hw.TypeScopeOp) and else_block_op.sym_name == type_scope_attr:
+            type_scopes.append(else_block_op)
 
     assert len(type_scopes) <= 1
     if len(type_scopes) == 1:
       type_scope = type_scopes[0]
     else:
       with ir.InsertionPoint.at_block_begin(mod.body):
-        guard_name = "__PYCDE_TYPES__"
         sv.VerbatimOp(ir.StringAttr.get("`ifndef " + guard_name), [],
                       symbols=ir.ArrayAttr.get([]))
         sv.VerbatimOp(ir.StringAttr.get("`define " + guard_name), [],
@@ -508,7 +511,7 @@ class Bits(BitVectorType):
 
 
 # A single bit is common enough to provide an alias to save 4 key strokes.
-bit = Bits(1)
+Bit = Bits(1)
 
 
 class SInt(BitVectorType):
@@ -797,6 +800,25 @@ class Bundle(Type):
     if to_channel_bc is None or from_channel_bc is None:
       raise ValueError("Bundle must have one channel in each direction.")
     return to_channel_bc, from_channel_bc
+
+  def create_uturn(self) -> typing.Tuple["BundleSignal", "BundleSignal"]:
+    """Creates two bundle signals which talk to each other. The types of them
+    are the inverse of each other, the first one matching this type. E.g.
+    anything which is sent on the TO channel 'foo' on the first channel will be
+    transmitted to the FROM channel 'foo' on the second bundle."""
+
+    b_type = self.inverted()
+    from .constructs import Wire
+    to_channel_wires = {
+        bc.name: Wire(bc.channel)
+        for bc in self.channels
+        if bc.direction == ChannelDirection.TO
+    }
+    a_bundle, a_froms = self.pack(**to_channel_wires)
+    b_bundle, b_froms = b_type.pack(**a_froms.from_channels)
+    for name, wire in to_channel_wires.items():
+      wire.assign(b_froms[name])
+    return a_bundle, b_bundle
 
   # Easy accessor for channel types by name.
   def __getattr__(self, attrname: str):

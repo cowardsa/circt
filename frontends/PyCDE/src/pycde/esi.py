@@ -7,8 +7,8 @@ from .common import (AppID, Clock, Input, InputChannel, Output, OutputChannel,
 from .constructs import AssignableSignal, Mux, Wire
 from .module import (generator, modparams, Module, ModuleLikeBuilderBase,
                      PortProxyBase)
-from .signals import (BitsSignal, BundleSignal, ChannelSignal, Signal,
-                      _FromCirctValue, UIntSignal)
+from .signals import (BitsSignal, BundleSignal, ChannelSignal, ClockSignal,
+                      Signal, _FromCirctValue, UIntSignal)
 from .support import clog2, optional_dict_to_dict_attr, get_user_loc
 from .system import System
 from .types import (Any, Bits, Bundle, BundledChannel, Channel,
@@ -18,6 +18,7 @@ from .types import (Any, Bits, Bundle, BundledChannel, Channel,
 from .circt import ir
 from .circt.dialects import esi as raw_esi, hw, msft
 
+import inspect
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple, cast
 import typing
@@ -100,6 +101,16 @@ class ServiceDecl(_PyProxy):
         impl_type=ir.StringAttr.get(builtin),
         inputs=[x.value for x in inputs]).operation.results
     return [_FromCirctValue(x) for x in impl_results]
+
+  def implement_as(self,
+                   builtin_type: str,
+                   *args: List[Signal],
+                   appid: Optional[AppID] = None):
+    """Implement this service using a CIRCT implementation named
+    'builtin_type'."""
+    if appid is None:
+      appid = AppID(self.name)
+    return self.instantiate_builtin(appid, builtin_type, inputs=args)
 
 
 class _RequestConnection:
@@ -354,8 +365,11 @@ class ServiceImplementationModuleBuilder(ModuleLikeBuilderBase):
     # pass, the IR can be invalid and the indexers assumes it is valid.
     sys.generate(skip_appid_index=True)
     # Now that the bundles should be assigned, we can cleanup the bundles and
-    # delete the service request op.
+    # delete the service request op reference.
     bundles.cleanup()
+
+    # Verify the generator did not produce invalid IR.
+    sys.mod.operation.verify()
 
     return rc
 
@@ -441,12 +455,11 @@ def DeclareRandomAccessMemory(inner_type: Type,
   them. Memories (as with all ESI services) are not actually instantiated until
   the place where you specify the implementation."""
 
-  @ServiceDecl
-  class DeclareRandomAccessMemory:
+  class DeclareRandomAccessMemory(ServiceDecl):
     __name__ = name
-    address_type = types.int((depth - 1).bit_length())
-    write_struct = types.struct([('address', address_type),
-                                 ('data', inner_type)])
+    address_width = (depth - 1).bit_length()
+    address_type = Bits(address_width)
+    write_struct = StructType([('address', address_type), ('data', inner_type)])
 
     read = Bundle([
         BundledChannel("address", ChannelDirection.FROM, address_type),
@@ -457,6 +470,31 @@ def DeclareRandomAccessMemory(inner_type: Type,
         BundledChannel("ack", ChannelDirection.TO, Bits(0))
     ])
 
+    def __init__(self):
+      super().__init__(self.__class__)
+      self.num_autonamed = 0
+
+    def get_write(self, data_type: Type, appid: Optional[AppID] = None):
+      """Return a request for a write operation with the given data type.
+      Sometimes necessary since the type of an imported RAM may not be
+      correct."""
+      if appid is None:
+        appid = AppID(self.name + "_writer", self.num_autonamed)
+      self.num_autonamed += 1
+      orig_req = self.write(appid)
+      new_arg_type = StructType([
+          ("address", UInt(DeclareRandomAccessMemory.address_width)),
+          ("data", data_type),
+      ])
+      xform_bundle_type = Bundle([
+          BundledChannel("req", ChannelDirection.FROM, new_arg_type),
+          BundledChannel("ack", ChannelDirection.TO, Bits(0))
+      ])
+      req = orig_req.coerce(xform_bundle_type,
+                            from_chan_transform=lambda x: x.bitcast(
+                                DeclareRandomAccessMemory.write_struct))
+      return req
+
     @staticmethod
     def _op(sym_name: ir.StringAttr):
       return raw_esi.RandomAccessMemoryDeclOp(
@@ -466,7 +504,7 @@ def DeclareRandomAccessMemory(inner_type: Type,
   if name is not None:
     DeclareRandomAccessMemory.name = name
     DeclareRandomAccessMemory.__name__ = name
-  return DeclareRandomAccessMemory
+  return DeclareRandomAccessMemory()
 
 
 def _import_ram_decl(sys: "System", ram_op: raw_esi.RandomAccessMemoryDeclOp):
@@ -736,7 +774,7 @@ class _FuncService(ServiceDecl):
   def __init__(self):
     super().__init__(self.__class__)
 
-  def get_coerced(self, name: AppID, bundle_type: Bundle) -> BundleSignal:
+  def get(self, name: AppID, bundle_type: Bundle) -> BundleSignal:
     """Treat any bi-directional bundle as a function by getting a proper
     function bundle with the appropriate types, then renaming the channels to
     match the 'bundle_type'. Returns a bundle signal of type 'bundle_type'."""
@@ -768,19 +806,6 @@ class _FuncService(ServiceDecl):
         **{to_channel_bc.name: arg_channel})
     from_channel.assign(from_chans[from_channel_bc.name])
     return ret_bundle
-
-  def get(self, name: AppID, func_type: Bundle) -> BundleSignal:
-    """Expose a bundle to the host as a function. Bundle _must_ have 'arg' and
-    'result' channels going FROM the server and TO the server, respectively."""
-    self._materialize_service_decl()
-
-    func_call = _FromCirctValue(
-        raw_esi.RequestConnectionOp(
-            func_type._type,
-            hw.InnerRefAttr.get(self.symbol, ir.StringAttr.get("call")),
-            name._appid).toClient)
-    assert isinstance(func_call, BundleSignal)
-    return func_call
 
   def get_call_chans(self, name: AppID, arg_type: Type,
                      result: Signal) -> ChannelSignal:
@@ -850,6 +875,42 @@ class _CallService(ServiceDecl):
 
 
 CallService = _CallService()
+
+
+class _Telemetry(ServiceDecl):
+  """ESI standard service to report telemetry data."""
+
+  report = Bundle([
+      BundledChannel("get", ChannelDirection.TO, Bits(0)),
+      BundledChannel("data", ChannelDirection.FROM, Any())
+  ])
+
+  def __init__(self):
+    super().__init__(self.__class__)
+
+  def report_signal(self, clk: ClockSignal, rst: BitsSignal, name: AppID,
+                    data: Signal) -> None:
+    """Report a value to the telemetry service. 'data' is the value to report."""
+    bundle_type = Bundle([
+        BundledChannel("get", ChannelDirection.TO, Bits(1)),
+        BundledChannel("data", ChannelDirection.FROM, data.type)
+    ])
+
+    report_bundle = self.report(name, bundle_type)
+    get_valid_wire = Wire(Bits(1))
+    data_channel, data_ready = Channel(data.type).wrap(data, get_valid_wire)
+    data_channel = data_channel.buffer(clk, rst, stages=1)
+    get_chan = report_bundle.unpack(data=data_channel)['get']
+    get_chan = get_chan.buffer(clk, rst, stages=1)
+    _, get_valid = get_chan.unwrap(data_ready)
+    get_valid_wire.assign(get_valid)
+
+  @staticmethod
+  def _op(sym_name: ir.StringAttr):
+    return raw_esi.TelemetryServiceDeclOp(sym_name)
+
+
+Telemetry = _Telemetry()
 
 
 def package(sys: System):

@@ -2,7 +2,7 @@
 # RUN: %rtgtool% %s --seed=0 --output-format=elaborated | FileCheck %s --check-prefix=ELABORATED
 # RUN: %rtgtool% %s --seed=0 -o %t --output-format=asm && FileCheck %s --input-file=%t --check-prefix=ASM
 
-from pyrtg import test, sequence, target, entry, rtg, Label, Set, Integer, Bag, rtgtest, Immediate, IntegerRegister, Array, Bool, Tuple
+from pyrtg import test, sequence, target, entry, rtg, Label, Set, Integer, Bag, rtgtest, Immediate, IntegerRegister, Array, Bool, Tuple, embed_comment, MemoryBlock, Memory
 
 # MLIR-LABEL: rtg.target @Tgt0 : !rtg.dict<entry0: !rtg.set<index>>
 # MLIR-NEXT: [[C0:%.+]] = index.constant 0
@@ -37,6 +37,19 @@ class Tgt1:
   @entry
   def entry1():
     return Label.declare("l0")
+
+
+# MLIR-LABEL: rtg.target @Tgt2
+# MLIR-NEXT: [[V0:%.+]] = rtg.isa.memory_block_declare [0x0 - 0x3f] : !rtg.isa.memory_block<32>
+# MLIR-NEXT: rtg.yield [[V0]] : !rtg.isa.memory_block<32>
+
+
+@target
+class Tgt2:
+
+  @entry
+  def mem_blk_0():
+    return MemoryBlock.declare(base_address=0, end_address=63, address_width=32)
 
 
 # MLIR-LABEL: rtg.target @Tgt4
@@ -207,6 +220,8 @@ def test1_args(set: Set):
 # MLIR-NEXT: [[RAND4:%.+]] = rtg.randomize_sequence [[SEQ1]]
 # MLIR-NEXT: rtg.embed_sequence [[RAND4]]
 
+# MLIR-NEXT: rtg.comment "this is a comment"
+
 # MLIR-NEXT: }
 
 # ELABORATED-LABEL: rtg.test @test2_labels
@@ -237,6 +252,8 @@ def test1_args(set: Set):
 # ELABORATED-NEXT: [[L5:%.+]] = rtg.label_decl "s1"
 # ELABORATED-NEXT: rtg.label local [[L5]]
 
+# ELABORATED-NEXT: rtg.comment "this is a comment"
+
 # ELABORATED-NEXT: }
 
 # ASM-LABEL: Begin of test2_labels
@@ -260,6 +277,8 @@ def test1_args(set: Set):
 # ASM-NEXT: l0:
 
 # ASM-NEXT: s1:
+
+# ASM-NEXT: # this is a comment
 
 # ASM-EMPTY:
 # ASM: End of test2_labels
@@ -310,6 +329,8 @@ def test2_labels():
 
   seq1()
 
+  embed_comment("this is a comment")
+
 
 # MLIR-LABEL: rtg.test @test3_registers_and_immediates()
 # MLIR-NEXT: [[IMM32:%.+]] = rtg.constant #rtg.isa.immediate<32, 32>
@@ -351,6 +372,25 @@ def test3_registers_and_immediates():
 def test4_integer_to_immediate():
   rtgtest.ADDI(IntegerRegister.t0(), IntegerRegister.t0(),
                Immediate(12, Integer(2)))
+
+
+# MLIR-LABEL: rtg.test @test6_memories
+# MLIR-NEXT: [[REG:%.+]] = rtg.fixed_reg #rtgtest.t0 : !rtgtest.ireg
+# MLIR-NEXT: [[IDX8:%.+]] = index.constant 8
+# MLIR-NEXT: [[IDX4:%.+]] = index.constant 4
+# MLIR-NEXT: [[MEM:%.+]] = rtg.isa.memory_alloc %mem_blk, [[IDX8]], [[IDX4]] : !rtg.isa.memory_block<32>
+# MLIR-NEXT: [[SIZE:%.+]] = rtg.isa.memory_size [[MEM]] : !rtg.isa.memory<32>
+# MLIR-NEXT: [[IMM:%.+]] = rtg.isa.int_to_immediate [[SIZE]] : !rtg.isa.immediate<32>
+# MLIR-NEXT: rtgtest.rv32i.auipc [[REG]], [[IMM]] : !rtg.isa.immediate<32>
+# MLIR-NEXT: [[BASE:%.+]] = rtg.isa.memory_base_address [[MEM]] : !rtg.isa.memory<32>
+# MLIR-NEXT: rtgtest.rv32i.auipc [[REG]], [[BASE]] : !rtg.isa.immediate<32>
+
+
+@test(("mem_blk", MemoryBlock.type(32)))
+def test6_memories(mem_blk):
+  mem = Memory.alloc(mem_blk, size=8, align=4)
+  rtgtest.AUIPC(IntegerRegister.t0(), Immediate(32, mem.size()))
+  rtgtest.AUIPC(IntegerRegister.t0(), mem.base_address())
 
 
 # MLIR-LABEL: rtg.test @test7_bools

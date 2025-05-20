@@ -12,6 +12,7 @@
 
 include "mlir/IR/EnumAttr.td"
 include "mlir/IR/OpAsmInterface.td"
+include "mlir/IR/RegionKindInterface.td"
 include "mlir/Interfaces/FunctionInterfaces.td"
 include "mlir/Interfaces/ControlFlowInterfaces.td"
 include "circt/Dialect/Emit/EmitOpInterfaces.td"
@@ -43,10 +44,9 @@ def OrderedOutputOp : SVOp<"ordered", [SingleBlock, NoTerminator, NoRegionArgume
 }
 
 def IfDefOp : SVOp<"ifdef", [
-    SingleBlock,
-    NoTerminator,
     NoRegionArguments,
     NonProceduralOp,
+    GraphRegionNoTerminator,
     DeclareOpInterfaceMethods<SymbolUserOpInterface>
 ]> {
   let summary = "'ifdef MACRO' block";
@@ -917,9 +917,15 @@ def MacroDefOp : SVOp<"macro.def",
   let results = (outs);
 
   let builders = [
-    OpBuilder<(ins "StringRef":$macroName, "StringRef":$format_string),
-                "build($_builder, $_state, macroName, format_string,"
-                "odsBuilder.getArrayAttr({}));">
+    OpBuilder<(ins "FlatSymbolRefAttr":$macroName), [{
+      auto formatString = StringAttr::get($_builder.getContext());
+      auto symbols = $_builder.getArrayAttr({});
+      build($_builder, $_state, macroName, formatString, symbols);
+    }]>,
+    OpBuilder<(ins "StringRef":$macroName, "StringRef":$formatString), [{
+      auto symbols = $_builder.getArrayAttr({});
+      build($_builder, $_state, macroName, formatString, symbols);
+    }]>
   ];
 
   let assemblyFormat = [{

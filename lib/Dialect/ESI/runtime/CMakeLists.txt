@@ -32,6 +32,12 @@ if(ESI_STATIC_RUNTIME)
   message("-- Building ESI runtime as a static library.")
 endif()
 
+option(ESI_RUNTIME_TRACE "Enable ESI trace-level logging." OFF)
+if (ESI_RUNTIME_TRACE)
+  message("-- ESI runtime trace-level logging enabled.")
+  add_compile_definitions(ESI_RUNTIME_TRACE)
+endif()
+
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED YES)
 set(CMAKE_INSTALL_RPATH "$ORIGIN/../lib")
@@ -130,6 +136,7 @@ set(ESICppRuntimeHeaders
   ${CMAKE_CURRENT_SOURCE_DIR}/cpp/include/esi/Common.h
   ${CMAKE_CURRENT_SOURCE_DIR}/cpp/include/esi/Context.h
   ${CMAKE_CURRENT_SOURCE_DIR}/cpp/include/esi/Design.h
+  ${CMAKE_CURRENT_SOURCE_DIR}/cpp/include/esi/Engines.h
   ${CMAKE_CURRENT_SOURCE_DIR}/cpp/include/esi/Logging.h
   ${CMAKE_CURRENT_SOURCE_DIR}/cpp/include/esi/Manifest.h
   ${CMAKE_CURRENT_SOURCE_DIR}/cpp/include/esi/Types.h
@@ -414,6 +421,8 @@ endif()
 
 option(ESI_COSIM "Enable ESI cosimulation." ON)
 if(ESI_COSIM)
+  message("-- ESI cosim enabled")
+
   # gRPC for cosimulation. Local install required.
   option(GRPC_PATH "Location of gRPC install.")
   if (${GRPC_PATH})

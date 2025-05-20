@@ -144,6 +144,34 @@ uint32_t rtgImmediateTypeGetWidth(MlirType type) {
   return cast<ImmediateType>(unwrap(type)).getWidth();
 }
 
+// MemoryType
+//===----------------------------------------------------------------------===//
+
+bool rtgTypeIsAMemory(MlirType type) { return isa<MemoryType>(unwrap(type)); }
+
+MlirType rtgMemoryTypeGet(MlirContext ctxt, uint32_t addressWidth) {
+  return wrap(MemoryType::get(unwrap(ctxt), addressWidth));
+}
+
+uint32_t rtgMemoryTypeGetAddressWidth(MlirType type) {
+  return cast<MemoryType>(unwrap(type)).getAddressWidth();
+}
+
+// MemoryBlockType
+//===----------------------------------------------------------------------===//
+
+bool rtgTypeIsAMemoryBlock(MlirType type) {
+  return isa<MemoryBlockType>(unwrap(type));
+}
+
+MlirType rtgMemoryBlockTypeGet(MlirContext ctxt, uint32_t addressWidth) {
+  return wrap(MemoryBlockType::get(unwrap(ctxt), addressWidth));
+}
+
+uint32_t rtgMemoryBlockTypeGetAddressWidth(MlirType type) {
+  return cast<MemoryBlockType>(unwrap(type)).getAddressWidth();
+}
+
 //===----------------------------------------------------------------------===//
 // Attribute API.
 //===----------------------------------------------------------------------===//
@@ -213,4 +241,15 @@ uint32_t rtgImmediateAttrGetWidth(MlirAttribute attr) {
 
 uint64_t rtgImmediateAttrGetValue(MlirAttribute attr) {
   return cast<ImmediateAttr>(unwrap(attr)).getValue().getZExtValue();
+}
+
+// AnyContexts
+//===----------------------------------------------------------------------===//
+
+bool rtgAttrIsAAnyContextAttr(MlirAttribute attr) {
+  return isa<AnyContextAttr>(unwrap(attr));
+}
+
+MlirAttribute rtgAnyContextAttrGet(MlirContext ctxt, MlirType type) {
+  return wrap(AnyContextAttr::get(unwrap(ctxt), unwrap(type)));
 }

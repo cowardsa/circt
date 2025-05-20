@@ -58,7 +58,13 @@ public:
             // Tuples
             TupleCreateOp, TupleExtractOp,
             // Immediates
-            IntToImmediateOp>([&](auto expr) -> ResultType {
+            IntToImmediateOp,
+            // Memories
+            MemoryAllocOp, MemoryBaseAddressOp, MemorySizeOp,
+            // Memory Blocks
+            MemoryBlockDeclareOp,
+            // Misc ops
+            CommentOp>([&](auto expr) -> ResultType {
           return thisCast->visitOp(expr, args...);
         })
         .Default([&](auto expr) -> ResultType {
@@ -119,6 +125,7 @@ public:
   HANDLE(ArraySizeOp, Unhandled);
   HANDLE(TupleCreateOp, Unhandled);
   HANDLE(TupleExtractOp, Unhandled);
+  HANDLE(CommentOp, Unhandled);
   HANDLE(LabelDeclOp, Unhandled);
   HANDLE(LabelUniqueDeclOp, Unhandled);
   HANDLE(LabelOp, Unhandled);
@@ -128,6 +135,10 @@ public:
   HANDLE(FixedRegisterOp, Unhandled);
   HANDLE(VirtualRegisterOp, Unhandled);
   HANDLE(IntToImmediateOp, Unhandled);
+  HANDLE(MemoryBlockDeclareOp, Unhandled);
+  HANDLE(MemoryAllocOp, Unhandled);
+  HANDLE(MemoryBaseAddressOp, Unhandled);
+  HANDLE(MemorySizeOp, Unhandled);
 #undef HANDLE
 };
 

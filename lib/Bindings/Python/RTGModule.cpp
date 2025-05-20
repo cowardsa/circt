@@ -133,6 +133,28 @@ void circt::python::populateDialectRTGSubmodule(nb::module_ &m) {
         return rtgImmediateTypeGetWidth(self);
       });
 
+  mlir_type_subclass(m, "MemoryBlockType", rtgTypeIsAMemoryBlock)
+      .def_classmethod(
+          "get",
+          [](nb::object cls, uint32_t addressWidth, MlirContext ctxt) {
+            return cls(rtgMemoryBlockTypeGet(ctxt, addressWidth));
+          },
+          nb::arg("self"), nb::arg("address_width"), nb::arg("ctxt") = nullptr)
+      .def_property_readonly("address_width", [](MlirType self) {
+        return rtgMemoryBlockTypeGetAddressWidth(self);
+      });
+
+  mlir_type_subclass(m, "MemoryType", rtgTypeIsAMemory)
+      .def_classmethod(
+          "get",
+          [](nb::object cls, uint32_t addressWidth, MlirContext ctxt) {
+            return cls(rtgMemoryTypeGet(ctxt, addressWidth));
+          },
+          nb::arg("self"), nb::arg("address_width"), nb::arg("ctxt") = nullptr)
+      .def_property_readonly("address_width", [](MlirType self) {
+        return rtgMemoryTypeGetAddressWidth(self);
+      });
+
   //===--------------------------------------------------------------------===//
   // Attributes
   //===--------------------------------------------------------------------===//
@@ -142,6 +164,14 @@ void circt::python::populateDialectRTGSubmodule(nb::module_ &m) {
           "get",
           [](nb::object cls, MlirType type, MlirContext ctxt) {
             return cls(rtgDefaultContextAttrGet(ctxt, type));
+          },
+          nb::arg("self"), nb::arg("type"), nb::arg("ctxt") = nullptr);
+
+  mlir_attribute_subclass(m, "AnyContextAttr", rtgAttrIsAAnyContextAttr)
+      .def_classmethod(
+          "get",
+          [](nb::object cls, MlirType type, MlirContext ctxt) {
+            return cls(rtgAnyContextAttrGet(ctxt, type));
           },
           nb::arg("self"), nb::arg("type"), nb::arg("ctxt") = nullptr);
 

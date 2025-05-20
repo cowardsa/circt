@@ -205,6 +205,12 @@ with Context() as ctx, Location.unknown():
   # CHECK: #rtg.default : !rtgtest.cpu
   print(attr)
 
+  attr = rtg.AnyContextAttr.get(rtgtest.CPUType.get())
+  # CHECK: !rtgtest.cpu
+  print(attr.type)
+  # CHECK: #rtg.any_context : !rtgtest.cpu
+  print(attr)
+
   immediate_type = rtg.ImmediateType.get(32)
   # CHECK: width=32
   print(f"width={immediate_type.width}")
@@ -218,6 +224,18 @@ with Context() as ctx, Location.unknown():
   print(f"value={immediate_attr.value}")
   # CHECK: #rtg.isa.immediate<32, 42>
   print(immediate_attr)
+
+  memory_block_type = rtg.MemoryBlockType.get(32)
+  # CHECK: width=32
+  print(f"width={memory_block_type.address_width}")
+  # CHECK: !rtg.isa.memory_block<32>
+  print(memory_block_type)
+
+  memoryTy = rtg.MemoryType.get(32)
+  # CHECK: address_width=32
+  print(f'address_width={memoryTy.address_width}')
+  # CHECK: !rtg.isa.memory<32>
+  print(memoryTy)
 
 with Context() as ctx, Location.unknown():
   circt.register_dialects(ctx)

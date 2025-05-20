@@ -641,6 +641,16 @@ def RandomNumberInRangeOp : RTGOp<"random_number_in_range", []> {
   let assemblyFormat = "` ` `[` $lowerBound `,` $upperBound `)` attr-dict";
 }
 
+//===- Misc Operations ----------------------------------------------------===//
+
+def CommentOp : RTGOp<"comment", []> {
+  let summary = "emit a comment in instruction stream";
+
+  let arguments = (ins StrAttr:$comment);
+
+  let assemblyFormat = "$comment attr-dict";
+}
+
 //===- ISA Register Handling Operations -----------------------------------===//
 
 def FixedRegisterOp : RTGOp<"fixed_reg", [
@@ -778,4 +788,84 @@ def IntToImmediateOp : RTGISAOp<"int_to_immediate", [Pure]> {
   let results = (outs ImmediateType:$result);
 
   let assemblyFormat = "$input `:` qualified(type($result)) attr-dict";
+}
+
+//===- ISA Memory Block Operations ----------------------------------------===//
+
+def MemoryBlockDeclareOp : RTGISAOp<"memory_block_declare", [
+  HasParent<"rtg::TargetOp">,
+]> {
+  let summary = "declare a memory block with the provided properties";
+  let description = [{
+    This operation declares a memory block to be allocated with the provided
+    properties. It is only allowed to declare new memory blocks in the
+    `rtg.target` operations and must be passed as argument to the `rtg.test`.
+    This is because the available memory blocks are specified by the hardware
+    design. This specification is fixed from the start and thus a test should
+    not be able to declare new memory blocks on-the-fly. However, tests are
+    allowed to allocate memory regions from these memory blocks.
+
+    The 'baseAddress' attribute specifies the first memory address (lowest
+    address representing a valid access to the memory) and the 'endAddress'
+    represents the last address (highest address that is valid to access the
+    memory).
+  }];
+
+  let arguments = (ins APIntAttr:$baseAddress, APIntAttr:$endAddress);
+  let results = (outs MemoryBlockType:$result);
+
+  let hasCustomAssemblyFormat = 1;
+  let hasVerifier = 1;
+}
+
+//===- ISA Memory Handling Operations -------------------------------------===//
+
+def MemoryAllocOp : RTGISAOp<"memory_alloc", [
+  TypesMatchWith<"memory must have the same address width as the memory block",
+                 "memoryBlock", "result",
+                 "MemoryType::get($_ctxt, " #
+                 "cast<MemoryBlockType>($_self).getAddressWidth())">,
+]> {
+  let summary = "allocate a memory with the provided properties";
+  let description = [{
+    This operation declares a memory to be allocated with the provided
+    properties. It is only allowed to declare new memories in the `rtg.target`
+    operations and must be passed as argument to the `rtg.test`.
+  }];
+
+  let arguments = (ins MemoryBlockType:$memoryBlock,
+                       Index:$size,
+                       Index:$alignment);
+
+  let results = (outs MemoryType:$result);
+
+  let assemblyFormat = [{
+    $memoryBlock `,` $size `,` $alignment
+    `:` qualified(type($memoryBlock)) attr-dict
+  }];
+}
+
+def MemoryBaseAddressOp : RTGISAOp<"memory_base_address", [
+  Pure,
+  DeclareOpInterfaceMethods<InferTypeOpInterface>,
+]> {
+  let summary = "get the memory base address as an immediate";
+  let description = [{
+    This operation returns the base address of the given memory. The bit-width
+    of the returned immediate must match the address width of the given memory.
+  }];
+
+  let arguments = (ins MemoryType:$memory);
+  let results = (outs ImmediateType:$result);
+
+  let assemblyFormat = "$memory `:` qualified(type($memory)) attr-dict";
+}
+
+def MemorySizeOp : RTGISAOp<"memory_size", [Pure]> {
+  let summary = "get the size of the memory in bytes";
+
+  let arguments = (ins MemoryType:$memory);
+  let results = (outs Index:$result);
+
+  let assemblyFormat = "$memory `:` qualified(type($memory)) attr-dict";
 }
