@@ -1,4 +1,5 @@
-//===- DatapathToSMT.cpp ------------------------------------------------------===//
+//===- DatapathToSMT.cpp
+//------------------------------------------------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -48,21 +49,66 @@ struct CompressOpConversion : OpConversionPattern<CompressOp> {
 
     Value operandRunner = operands[0];
     for (Value operand : operands.drop_front())
-      operandRunner = rewriter.create<smt::BVAddOp>(op.getLoc(), operandRunner, operand);
+      operandRunner =
+          rewriter.create<smt::BVAddOp>(op.getLoc(), operandRunner, operand);
 
     SmallVector<Value, 2> newResults;
     Value resultRunner;
     for (Value result : results) {
-      auto declareFunOp = rewriter.create<smt::DeclareFunOp>(op.getLoc(), typeConverter->convertType(result.getType()));
+      auto declareFunOp = rewriter.create<smt::DeclareFunOp>(
+          op.getLoc(), typeConverter->convertType(result.getType()));
       newResults.push_back(declareFunOp.getResult());
       if (newResults.size() > 1)
-        resultRunner = rewriter.create<smt::BVAddOp>(op.getLoc(), resultRunner, declareFunOp);
+        resultRunner = rewriter.create<smt::BVAddOp>(op.getLoc(), resultRunner,
+                                                     declareFunOp);
       else
         resultRunner = declareFunOp;
     }
 
+    auto premise =
+        rewriter.create<smt::EqOp>(op.getLoc(), operandRunner, resultRunner);
+    rewriter.create<smt::AssertOp>(op.getLoc(), premise);
 
-    auto premise = rewriter.create<smt::EqOp>(op.getLoc(), operandRunner, resultRunner);
+    if (newResults.size() != results.size())
+      return rewriter.notifyMatchFailure(op, "expected same number of results");
+
+    rewriter.replaceOp(op, newResults);
+    return success();
+  }
+};
+
+struct PartialProductOpConversion : OpConversionPattern<PartialProductOp> {
+  using OpConversionPattern<PartialProductOp>::OpConversionPattern;
+  using OpAdaptor = typename PartialProductOp::Adaptor;
+
+  LogicalResult
+  matchAndRewrite(PartialProductOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+
+    ValueRange operands = adaptor.getOperands();
+    if (operands.size() != 2)
+      return failure();
+
+    ValueRange results = op.getResults();
+
+    auto mulResult = rewriter.create<smt::BVMulOp>(op.getLoc(), operands[0], operands[1]);
+      
+
+    SmallVector<Value, 2> newResults;
+    Value resultRunner;
+    for (Value result : results) {
+      auto declareFunOp = rewriter.create<smt::DeclareFunOp>(
+          op.getLoc(), typeConverter->convertType(result.getType()));
+      newResults.push_back(declareFunOp.getResult());
+      if (newResults.size() > 1)
+        resultRunner = rewriter.create<smt::BVAddOp>(op.getLoc(), resultRunner,
+                                                     declareFunOp);
+      else
+        resultRunner = declareFunOp;
+    }
+
+    auto premise =
+        rewriter.create<smt::EqOp>(op.getLoc(), mulResult, resultRunner);
     rewriter.create<smt::AssertOp>(op.getLoc(), premise);
 
     if (newResults.size() != results.size())
@@ -86,10 +132,9 @@ struct ConvertDatapathToSMTPass
 };
 } // namespace
 
-void circt::populateDatapathToSMTConversionPatterns(TypeConverter &converter,
-                                                RewritePatternSet &patterns) {
-  patterns.add<CompressOpConversion>(
-      converter, patterns.getContext());
+void circt::populateDatapathToSMTConversionPatterns(
+    TypeConverter &converter, RewritePatternSet &patterns) {
+  patterns.add<CompressOpConversion, PartialProductOpConversion>(converter, patterns.getContext());
 
   // TODO: there are two unsupported operations in the comb dialect: 'parity'
   // and 'truth_table'.

@@ -141,31 +141,11 @@ struct CombMulOpConversion : OpConversionPattern<MulOp> {
     // = sum_{i=0}^{n} a_i * 2^i * b
     // = sum_{i=0}^{n} (a_i ? b : 0) << i
     int64_t width = op.getType().getIntOrFloatBitWidth();
-    auto aBits = extractBits(rewriter, adaptor.getInputs()[0]);
-    SmallVector<Value> results;
-    auto rhs = op.getInputs()[1];
-    auto zero = rewriter.create<hw::ConstantOp>(op.getLoc(),
-                                                llvm::APInt::getZero(width));
-    for (int64_t i = 0; i < width; ++i) {
-      auto aBit = aBits[i];
-      auto andBit =
-          rewriter.createOrFold<comb::MuxOp>(op.getLoc(), aBit, rhs, zero);
-      auto upperBits = rewriter.createOrFold<comb::ExtractOp>(
-          op.getLoc(), andBit, 0, width - i);
-      if (i == 0) {
-        results.push_back(upperBits);
-        continue;
-      }
+    
+    auto pp = rewriter.create<datapath::PartialProductOp>(
+        op.getLoc(), op.getInputs(), width);
 
-      auto lowerBits =
-          rewriter.create<hw::ConstantOp>(op.getLoc(), APInt::getZero(i));
-
-      auto shifted = rewriter.createOrFold<comb::ConcatOp>(
-          op.getLoc(), op.getType(), ValueRange{upperBits, lowerBits});
-      results.push_back(shifted);
-    }
-
-    rewriter.replaceOpWithNewOp<comb::AddOp>(op, results, true);
+    rewriter.replaceOpWithNewOp<comb::AddOp>(op, pp.getResults(), true);
     return success();
   }
 };
