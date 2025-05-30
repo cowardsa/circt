@@ -6,9 +6,9 @@ set(LLVM_TARGET_DEFINITIONS Datapath.td)
 # mlir_tablegen(CombEnums.cpp.inc -gen-enum-defs)
 # add_public_tablegen_target(MLIRCombEnumsIncGen)
 
-# set(LLVM_TARGET_DEFINITIONS Passes.td)
-# mlir_tablegen(Passes.h.inc -gen-pass-decls)
-# add_public_tablegen_target(CIRCTCombTransformsIncGen)
+set(LLVM_TARGET_DEFINITIONS DatapathPasses.td)
+mlir_tablegen(DatapathPasses.h.inc -gen-pass-decls)
+add_public_tablegen_target(CIRCTDatapathTransformsIncGen)
 
 # Generate Pass documentation.
-# add_circt_doc(Passes CombPasses -gen-pass-doc)
+add_circt_doc(Passes DatapathPasses -gen-pass-doc)

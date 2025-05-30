@@ -16,7 +16,6 @@
 #include "mlir/IR/Matchers.h"
 #include "mlir/IR/PatternMatch.h"
 #include "llvm/Support/KnownBits.h"
-#include <algorithm>
 
 using namespace mlir;
 using namespace circt;
@@ -26,6 +25,7 @@ using namespace matchers;
 //===----------------------------------------------------------------------===//
 // Unary Operations
 //===----------------------------------------------------------------------===//
+
 
 struct FoldAddIntoCompress : public OpRewritePattern<comb::AddOp> {
   using OpRewritePattern::OpRewritePattern;

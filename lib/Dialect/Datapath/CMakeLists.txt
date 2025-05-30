@@ -21,4 +21,5 @@ add_circt_dialect_library(CIRCTDatapath
   MLIRInferTypeOpInterface
   )
 
+add_subdirectory(Transforms)
 # add_dependencies(circt-headers)
