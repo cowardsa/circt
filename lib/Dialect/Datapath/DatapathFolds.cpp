@@ -25,7 +25,53 @@ using namespace matchers;
 //===----------------------------------------------------------------------===//
 // Unary Operations
 //===----------------------------------------------------------------------===//
+struct FoldCompressIntoCompress : public OpRewritePattern<datapath::CompressOp> {
+  using OpRewritePattern::OpRewritePattern;
 
+  LogicalResult matchAndRewrite(datapath::CompressOp compOp,
+                                PatternRewriter &rewriter) const override {
+    // Get operands of the AddOp
+    auto operands = compOp.getOperands();
+    SmallVector<Value, 8> processedCompressorResults;
+    SmallVector<Value, 8> newCompressOperands;
+    auto numCompress = 0;
+    bool hasRegArgs = false;
+
+    // Check if any operand is a CompressOp and collect all operands
+    for (Value operand : operands) {
+      if (llvm::is_contained(processedCompressorResults, operand))
+        continue; // Skip if already processed this compressor
+
+      if (auto compressOp = operand.getDefiningOp<datapath::CompressOp>()) {
+        // Found a compress op - add its operands to our new list
+        ++numCompress;
+        llvm::append_range(newCompressOperands, compressOp.getOperands());
+        // Only process each compressor once
+        llvm::append_range(processedCompressorResults, compressOp.getResults());
+      } else if (auto addOp = operand.getDefiningOp<comb::AddOp>()) {
+        llvm::append_range(newCompressOperands, addOp.getOperands());
+      }
+      else {
+        hasRegArgs = true;
+        // Regular operand - just add it to our list
+        newCompressOperands.push_back(operand);
+      }
+    }
+
+    // If no compress was found, this pattern doesn't apply
+    if (newCompressOperands.size() <= compOp.getNumOperands())
+      return failure();
+
+    // Create a new CompressOp with all collected operands
+    rewriter.replaceOpWithNewOp<datapath::CompressOp>(
+        compOp, newCompressOperands, 2);
+
+    // Replace the original AddOp with our new CompressOp
+    // rewriter.replaceOpWithNewOp<comb::AddOp>(compOp, newCompressOp.getResults(),
+                                            //  true);
+    return success();
+  }
+};
 
 struct FoldAddIntoCompress : public OpRewritePattern<comb::AddOp> {
   using OpRewritePattern::OpRewritePattern;
@@ -147,5 +193,5 @@ void CompressOp::getCanonicalizationPatterns(RewritePatternSet &results,
                                              MLIRContext *context) {
   // Add the fold pattern
   results.add<FoldAddIntoCompress, ConstantFoldCompress,
-              ConstantFoldPartialProduct>(context);
+              ConstantFoldPartialProduct, FoldCompressIntoCompress>(context);
 }
