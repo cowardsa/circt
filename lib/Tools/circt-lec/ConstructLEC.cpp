@@ -161,16 +161,14 @@ void ConstructLECPass::runOnOperation() {
 
   // TODO: we should find a more elegant way of reporting the result than
   // already inserting some LLVM here
-  if (insertReporting) {
-    Value eqFormatString =
-        lookupOrCreateStringGlobal(builder, getOperation(), "c1 == c2\n");
-    Value neqFormatString =
-        lookupOrCreateStringGlobal(builder, getOperation(), "c1 != c2\n");
-    Value formatString = builder.create<LLVM::SelectOp>(
-        loc, areEquivalent, eqFormatString, neqFormatString);
-    builder.create<LLVM::CallOp>(loc, printfFunc.value(),
-                                 ValueRange{formatString});
+  Value eqFormatString =
+      lookupOrCreateStringGlobal(builder, getOperation(), "c1 == c2\n");
+  Value neqFormatString =
+      lookupOrCreateStringGlobal(builder, getOperation(), "c1 != c2\n");
+  Value formatString = builder.create<LLVM::SelectOp>(
+      loc, areEquivalent, eqFormatString, neqFormatString);
+  builder.create<LLVM::CallOp>(loc, printfFunc.value(),
+                               ValueRange{formatString});
 
-    builder.create<func::ReturnOp>(loc, ValueRange{});
-  }
+  builder.create<func::ReturnOp>(loc, ValueRange{});
 }

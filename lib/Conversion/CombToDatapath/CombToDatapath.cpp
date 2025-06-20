@@ -154,7 +154,7 @@ struct CombMulOpConversion : OpConversionPattern<MulOp> {
 } // namespace
 
 //===----------------------------------------------------------------------===//
-// Convert Comb to AIG pass
+// Convert Comb to Datapath pass
 //===----------------------------------------------------------------------===//
 
 namespace {
