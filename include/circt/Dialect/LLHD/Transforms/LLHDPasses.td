@@ -111,6 +111,11 @@ def Sig2Reg : Pass<"llhd-sig2reg", "hw::HWModuleOp"> {
 
 def Mem2RegPass : Pass<"llhd-mem2reg"> {
   let summary = "Promotes memory and signal slots into values.";
+  let dependentDialects = [
+    "comb::CombDialect",
+    "hw::HWDialect",
+    "mlir::cf::ControlFlowDialect",
+  ];
 }
 
 def TemporalCodeMotion : Pass<"llhd-temporal-code-motion", "hw::HWModuleOp"> {
@@ -156,10 +161,7 @@ def HoistSignalsPass : Pass<"llhd-hoist-signals"> {
 }
 
 def LowerProcessesPass : Pass<"llhd-lower-processes", "hw::HWModuleOp"> {
-  let summary = "Convert combinational LLHD processes to SCF execute regions";
-  let dependentDialects = [
-    "mlir::scf::SCFDialect",
-  ];
+  let summary = "Convert process ops to combinational ops where possible";
 }
 
 def DeseqPass : Pass<"llhd-deseq", "hw::HWModuleOp"> {
@@ -167,8 +169,19 @@ def DeseqPass : Pass<"llhd-deseq", "hw::HWModuleOp"> {
   let dependentDialects = [
     "comb::CombDialect",
     "hw::HWDialect",
-    "mlir::scf::SCFDialect",
     "seq::SeqDialect",
+  ];
+}
+
+def CombineDrivesPass : Pass<"llhd-combine-drives", "hw::HWModuleOp"> {
+  let summary = "Combine scalar drives into aggregate drives";
+  let description = [{
+    If individual drives cover all of an aggregate signal's fields, merge them
+    into a single drive of the whole aggregate value.
+  }];
+  let dependentDialects = [
+    "comb::CombDialect",
+    "hw::HWDialect",
   ];
 }
 

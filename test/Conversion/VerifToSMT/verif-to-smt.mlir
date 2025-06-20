@@ -83,6 +83,23 @@ func.func @test_lec(%arg0: !smt.bv<1>) -> (i1, i1, i1) {
     verif.yield
   }
 
+  %4 = verif.lec first {
+  ^bb0(%arg1: i32):
+    verif.yield %arg1 : i32
+  } second {
+  ^bb0(%arg2: i32):
+    verif.yield %arg2 : i32
+  }
+  // CHECK: smt.solver() : () -> () {
+  // CHECK:   [[V11:%.+]] = smt.declare_fun : !smt.bv<32>
+  // CHECK:   [[EQ3:%.+]] = smt.distinct [[V11]], [[V11]] : !smt.bv<32>
+  // CHECK:   smt.assert [[EQ3]]
+  // CHECK:   smt.check sat {
+  // CHECK:   } unknown {
+  // CHECK:   } unsat {
+  // CHECK:   }
+  // CHECK: }
+
   // CHECK: return [[EQ]], [[EQ2]], %true
   return %1, %2, %3 : i1, i1, i1
 }
@@ -103,6 +120,7 @@ func.func @test_lec(%arg0: !smt.bv<1>) -> (i1, i1, i1) {
 // CHECK:      [[FOR:%.+]]:7 = scf.for [[ARG0:%.+]] = [[C0_I32]] to [[C10_I32]] step [[C1_I32]] iter_args([[ARG1:%.+]] = [[INIT]]#0, [[ARG2:%.+]] = [[F0]], [[ARG3:%.+]] = [[F1]], [[ARG4:%.+]] = [[C42_BV32]], [[ARG5:%.+]] = [[ARRAYFUN]], [[ARG6:%.+]] = [[INIT]]#1, [[ARG7:%.+]] = [[FALSE]])
 // CHECK:        smt.pop 1
 // CHECK:        smt.push 1
+// CHECK-NOT:    scf.if
 // CHECK:        [[CIRCUIT:%.+]]:4 = func.call @bmc_circuit([[ARG1]], [[ARG2]], [[ARG3]], [[ARG4]], [[ARG5]])
 // CHECK:        [[SMTCHECK:%.+]] = smt.check sat {
 // CHECK:          smt.yield [[TRUE]]

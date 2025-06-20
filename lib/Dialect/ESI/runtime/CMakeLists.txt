@@ -80,20 +80,27 @@ else()
   endif()
 endif()
 
-FetchContent_Declare(
-  fmt
-  GIT_REPOSITORY https://github.com/fmtlib/fmt
-  GIT_TAG        11.1.4)
-FetchContent_MakeAvailable(fmt)
+# fmt is used for logging and formatting messages.
+if (NOT TARGET fmt::fmt-header-only)
+  message(STATUS "fmt not found, pulling down from git")
+  FetchContent_Declare(
+    fmt
+    GIT_REPOSITORY https://github.com/fmtlib/fmt
+    GIT_TAG        11.1.4)
+  FetchContent_MakeAvailable(fmt)
+endif()
 
 # CLI11 is used for tools' command line options parsing.
-FetchContent_Declare(
-    cli11_proj
-    QUIET
-    GIT_REPOSITORY https://github.com/CLIUtils/CLI11.git
-    GIT_TAG v2.5.0
-)
-FetchContent_MakeAvailable(cli11_proj)
+if (NOT TARGET CLI11::CLI11)
+  message(STATUS "CLI11 not found, pulling down from git")
+  FetchContent_Declare(
+      cli11_proj
+      QUIET
+      GIT_REPOSITORY https://github.com/CLIUtils/CLI11.git
+      GIT_TAG v2.5.0
+  )
+  FetchContent_MakeAvailable(cli11_proj)
+endif()
 
 # In a Python wheel build, we need to install libraries to different places.
 option(WHEEL_BUILD "Set up the build for a Python wheel." OFF)
@@ -189,28 +196,27 @@ endif()
 target_link_libraries(ESICppRuntime PUBLIC
   ${ZLIB_LIBRARY}
   nlohmann_json::nlohmann_json
+)
+target_link_libraries(ESICppRuntime PRIVATE
   fmt::fmt-header-only
 )
 if(NOT MSVC)
   target_link_libraries(ESICppRuntime PRIVATE
     dl
   )
-  target_link_options(ESICppRuntime PRIVATE
+  target_link_options(ESICppRuntime PUBLIC
     -pthread
   )
 endif()
 add_dependencies(ESIRuntime ESICppRuntime)
-if (WHEEL_BUILD)
-  if (WIN32)
-    set(PYLIBDIR ".")
-  else()
-    set(PYLIBDIR "lib")
-  endif()
+if (WIN32)
+  set(ESIRT_INSTALL_LIBDIR ".")
 else()
-  set(PYLIBDIR "python/esiaccel")
+  set(ESIRT_INSTALL_LIBDIR "lib")
 endif()
+
 install(TARGETS ESICppRuntime
-  DESTINATION ${PYLIBDIR}
+  DESTINATION ${ESIRT_INSTALL_LIBDIR}
   RUNTIME_DEPENDENCIES
     PRE_EXCLUDE_REGEXES .*
     PRE_INCLUDE_REGEXES zlibd zlib libz
@@ -222,7 +228,12 @@ install(FILES ${ESICppRuntimeHeaders}
   COMPONENT ESIRuntime
 )
 
-install(FILES ${CMAKE_CURRENT_SOURCE_DIR}/cpp/cmake/esiaccelConfig.cmake
+configure_file(
+  ${CMAKE_CURRENT_SOURCE_DIR}/cpp/cmake/esiaccelConfig.cmake.in
+  ${CMAKE_CURRENT_BINARY_DIR}/cpp/cmake/esiaccelConfig.cmake
+  @ONLY
+)
+install(FILES ${CMAKE_CURRENT_BINARY_DIR}/cpp/cmake/esiaccelConfig.cmake
   DESTINATION cmake
   COMPONENT ESIRuntime
 )
@@ -365,7 +376,7 @@ if(Python3_FOUND)
       )
     endif()
     install(RUNTIME_DEPENDENCY_SET ESICppRuntime_RUNTIME_DEPS
-      DESTINATION ${PYLIBDIR}
+      DESTINATION ${ESIRT_INSTALL_LIBDIR}
       PRE_EXCLUDE_REGEXES .*
       PRE_INCLUDE_REGEXES zlibd zlib
       COMPONENT ESIRuntime
@@ -464,7 +475,7 @@ if(ESI_COSIM)
   add_dependencies(ESIRuntime CosimBackend)
 
   install(TARGETS CosimBackend
-    DESTINATION ${PYLIBDIR}
+    DESTINATION ${ESIRT_INSTALL_LIBDIR}
     COMPONENT ESIRuntime
   )
 
@@ -503,7 +514,7 @@ if (XRT_PATH)
   )
   add_dependencies(ESIRuntime XrtBackend)
   install(TARGETS XrtBackend
-    DESTINATION ${PYLIBDIR}
+    DESTINATION ${ESIRT_INSTALL_LIBDIR}
     COMPONENT ESIRuntime
   )
 endif()

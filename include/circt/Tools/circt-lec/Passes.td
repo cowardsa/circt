@@ -38,12 +38,17 @@ def ConstructLEC : Pass<"construct-lec", "::mlir::ModuleOp"> {
     Option<"secondModule", "second-module", "std::string",
            /*default=*/"",
            "Name of the second of the two modules to compare.">,
-    Option<"insertMainFunc", "insert-main", "bool",
-           /*default=*/"false",
-           "Whether a main function should be inserted for AOT compilation.">,
-    Option<"insertReporting", "insert-report", "bool",
-           /*default=*/"true",
-           "Whether LLVM code should be inserted to report the result.">,
+    Option<"insertMode", "insert-mode", "lec::InsertAdditionalModeEnum",
+           /*default=*/"lec::InsertAdditionalModeEnum::Reporting",           
+            "Select what additional code to add.",
+            [{::llvm::cl::values(
+             clEnumValN(lec::InsertAdditionalModeEnum::None,
+             "none", "Do not insert any additional code."),
+             clEnumValN(lec::InsertAdditionalModeEnum::Reporting,
+             "reporting", "Insert LLVM code to report LEC result."),
+             clEnumValN(lec::InsertAdditionalModeEnum::Main,
+             "main", "Insert main function for AOT compilation and reporting.")
+           )}]>,
   ];
 
   let dependentDialects = [

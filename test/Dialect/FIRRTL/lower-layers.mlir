@@ -138,6 +138,7 @@ firrtl.circuit "Test" {
   // CHECK-NEXT:   %w_probe = firrtl.node sym @sym interesting_name %w : !firrtl.uint<1>
   // CHECK-NEXT:   firrtl.instance {{.+}} {doNotPrint, output_file = #hw.output_file<"layers-CaptureProbeSrc-A.sv", excludeFromFileList>} @CaptureProbeSrc_A
   // CHECK-NEXT: }
+  hw.hierpath private @xmrPath [@CaptureProbeSrc::@sym]
   firrtl.module @CaptureProbeSrc() {
     %w = firrtl.wire : !firrtl.uint<1>
     %w_probe = firrtl.node sym @sym interesting_name %w : !firrtl.uint<1>
@@ -310,13 +311,13 @@ firrtl.circuit "Test" {
   // XMR Ref ops used by force_initial are cloned.
   //
   // CHECK:      firrtl.module private @XmrRef_A()
-  // CHECK-NEXT:   %0 = firrtl.xmr.ref @RefXmrRef_path : !firrtl.rwprobe<uint<1>, @A>
+  // CHECK-NEXT:   %0 = firrtl.xmr.ref @XmrRef_path : !firrtl.rwprobe<uint<1>, @A>
   // CHECK-NEXT:   %a = firrtl.wire
   // CHECK-NEXT:   %c1_ui1 = firrtl.constant 1
   // CHECK-NEXT:   firrtl.ref.force_initial %c1_ui1, %0, %c1_ui1
   hw.hierpath private @XmrRef_path [@XmrRef::@a]
   firrtl.module @XmrRef() {
-    %0 = firrtl.xmr.ref @RefXmrRef_path : !firrtl.rwprobe<uint<1>, @A>
+    %0 = firrtl.xmr.ref @XmrRef_path : !firrtl.rwprobe<uint<1>, @A>
     firrtl.layerblock @A {
       %a = firrtl.wire sym @a : !firrtl.uint<1>
       %c1_ui1 = firrtl.constant 1 : !firrtl.const.uint<1>
@@ -688,3 +689,24 @@ firrtl.circuit "Top" {
   // CHECK-NOT: emit.file "layers-Top-Bound-Inline.sv"
   firrtl.module @Top() {}
 }
+
+// -----
+
+// Check that no duplicate include statements are generated.
+firrtl.circuit "Top" {
+  firrtl.layer @Layer bind {}
+
+  firrtl.module @Component() {
+    firrtl.layerblock @Layer {}
+  }
+
+  // There should only be one include statement.
+  // CHECK:     emit.file "layers-Top-Layer.sv"
+  // CHECK:     sv.include  local "layers-Component-Layer.sv"
+  // CHECK-NOT: sv.include  local "layers-Component-Layer.sv"
+  firrtl.module @Top() {
+    firrtl.instance component1 @Component()
+    firrtl.instance component2 @Component()
+  }
+}
+

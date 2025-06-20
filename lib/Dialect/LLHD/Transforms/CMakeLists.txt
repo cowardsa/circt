@@ -1,7 +1,8 @@
 add_circt_dialect_library(CIRCTLLHDTransforms
+  CombineDrives.cpp
   Deseq.cpp
   DesequentializationPass.cpp
-  DNF.cpp
+  DeseqUtils.cpp
   EarlyCodeMotionPass.cpp
   FunctionEliminationPass.cpp
   HoistSignals.cpp

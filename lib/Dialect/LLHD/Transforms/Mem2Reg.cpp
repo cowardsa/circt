@@ -6,9 +6,11 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "circt/Dialect/Comb/CombOps.h"
 #include "circt/Dialect/HW/HWTypes.h"
 #include "circt/Dialect/LLHD/IR/LLHDOps.h"
 #include "circt/Dialect/LLHD/Transforms/LLHDPasses.h"
+#include "circt/Support/UnusedOpPruner.h"
 #include "mlir/Analysis/Liveness.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "mlir/IR/Dominance.h"
@@ -206,8 +208,11 @@ static DefSlot blockingSlot(Value slot) { return {slot, 0}; }
 static DefSlot delayedSlot(Value slot) { return {slot, 1}; }
 static Value getSlot(DefSlot slot) { return slot.getPointer(); }
 static bool isDelayed(DefSlot slot) { return slot.getInt(); }
+static Type getStoredType(Value slot) {
+  return cast<hw::InOutType>(slot.getType()).getElementType();
+}
 static Type getStoredType(DefSlot slot) {
-  return cast<hw::InOutType>(slot.getPointer().getType()).getElementType();
+  return getStoredType(slot.getPointer());
 }
 static Location getLoc(DefSlot slot) { return slot.getPointer().getLoc(); }
 
@@ -292,9 +297,9 @@ struct OpNode : public LatticeNode {
 struct ProbeNode : public OpNode {
   Value slot;
 
-  ProbeNode(PrbOp op, LatticeValue *valueBefore, LatticeValue *valueAfter)
-      : OpNode(Kind::Probe, op, valueBefore, valueAfter), slot(op.getSignal()) {
-  }
+  ProbeNode(PrbOp op, Value slot, LatticeValue *valueBefore,
+            LatticeValue *valueAfter)
+      : OpNode(Kind::Probe, op, valueBefore, valueAfter), slot(slot) {}
 
   static bool classof(const LatticeNode *n) { return n->kind == Kind::Probe; }
 };
@@ -303,14 +308,20 @@ struct DriveNode : public OpNode {
   DefSlot slot;
   Def *def;
 
-  DriveNode(DrvOp op, Def *def, LatticeValue *valueBefore,
+  DriveNode(DrvOp op, Value slot, Def *def, LatticeValue *valueBefore,
             LatticeValue *valueAfter)
       : OpNode(Kind::Drive, op, valueBefore, valueAfter),
-        slot(isDeltaDrive(op) ? delayedSlot(op.getSignal())
-                              : blockingSlot(op.getSignal())),
+        slot(isDeltaDrive(op) ? delayedSlot(slot) : blockingSlot(slot)),
         def(def) {
     assert(isBlockingDrive(op) || isDeltaDrive(op));
   }
+
+  /// Returns true if the op does not drive an entire slot, but only a part of a
+  /// slot through a projection.
+  bool drivesProjection() const { return op->getOperand(0) != getSlot(slot); }
+
+  /// Return the drive op.
+  DrvOp getDriveOp() const { return cast<DrvOp>(op); }
 
   static bool classof(const LatticeNode *n) { return n->kind == Kind::Drive; }
 };
@@ -511,6 +522,97 @@ void Lattice::dump(llvm::raw_ostream &os) {
 #endif
 
 //===----------------------------------------------------------------------===//
+// Projection Utilities
+//===----------------------------------------------------------------------===//
+
+namespace {
+/// A single projection operation, together with the concrete value of the
+/// signal being projected into. This helper is useful to unpack a stack of
+/// projections to get the targeted value, change it, and then pack the stack
+/// back up into an updated value.
+struct Projection {
+  /// The projection operation.
+  Operation *op;
+  /// The value being projected into. This is not the op's target signal, but
+  /// rather the value of the op's target signal.
+  Value into;
+};
+} // namespace
+
+/// A stack of projection operations.
+using ProjectionStack = SmallVector<Projection>;
+
+/// Collect the `llhd.sig.*` projection ops between `fromSignal` and `toSlot`.
+/// The `fromSignal` value must be derived from `toSlot` through only
+/// `llhd.sig.*` operations. The result is a stack; the op producing
+/// `fromSignal` appears first in the vector, while the final op projecting into
+/// `toSlot` appears last in the vector.
+static ProjectionStack getProjections(Value fromSignal, Value toSlot) {
+  ProjectionStack stack;
+  while (fromSignal != toSlot) {
+    auto *op = cast<OpResult>(fromSignal).getOwner();
+    stack.push_back({op, Value()});
+    fromSignal = op->getOperand(0);
+  }
+  return stack;
+}
+
+/// Resolve a stack of projections by taking a value and descending into its
+/// subelements until the final value targeted by the projection stack remains,
+/// which is then returned. Also updates the `into` fields of the projections in
+/// the stack to represent the concrete value of intermediate projections. This
+/// allows a later `packProjections` to reconstruct the root value with the
+/// field targeted by the projection updated to a different value.
+static Value unpackProjections(OpBuilder &builder, Value value,
+                               ProjectionStack &projections) {
+  for (auto &projection : llvm::reverse(projections)) {
+    projection.into = value;
+    value =
+        TypeSwitch<Operation *, Value>(projection.op)
+            .Case<SigArrayGetOp>([&](auto op) {
+              return builder.createOrFold<hw::ArrayGetOp>(op.getLoc(), value,
+                                                          op.getIndex());
+            })
+            .Case<SigExtractOp>([&](auto op) {
+              auto type = cast<hw::InOutType>(op.getType()).getElementType();
+              auto width = type.getIntOrFloatBitWidth();
+              return comb::createDynamicExtract(builder, op.getLoc(), value,
+                                                op.getLowBit(), width);
+            });
+  }
+  return value;
+}
+
+/// Undo a stack of projections by taking the value of the projected field and
+/// injecting it into the surrounding aggregate value that the projection
+/// targets. This requires the `into` fields to be set to the concrete value of
+/// the intermediate projections.
+///
+/// Example:
+/// ```
+/// auto projections = getProjections(...);
+/// auto fieldValue = unpackProjections(..., aggregateValue, projections);
+/// fieldValue = update(fieldValue);
+/// aggregateValue = packProjections(..., fieldValue, projections);
+/// ```
+static Value packProjections(OpBuilder &builder, Value value,
+                             const ProjectionStack &projections) {
+  for (auto projection : projections) {
+    value = TypeSwitch<Operation *, Value>(projection.op)
+                .Case<SigArrayGetOp>([&](auto op) {
+                  return builder.createOrFold<hw::ArrayInjectOp>(
+                      op.getLoc(), projection.into, op.getIndex(), value);
+                })
+                .Case<SigExtractOp>([&](auto op) {
+                  return comb::createDynamicInject(builder, op.getLoc(),
+                                                   projection.into,
+                                                   op.getLowBit(), value);
+                });
+  }
+  return value;
+}
+
+//===----------------------------------------------------------------------===//
 // Drive/Probe to SSA Value Promotion
 //===----------------------------------------------------------------------===//
 
@@ -521,6 +623,7 @@ struct Promoter {
   LogicalResult promote();
 
   void findPromotableSlots();
+  Value resolveSlot(Value projectionOrSlot);
 
   void captureAcrossWait();
   void captureAcrossWait(PrbOp probeOp, ArrayRef<WaitOp> waitOps,
@@ -544,6 +647,9 @@ struct Promoter {
 
   void resolveDefinitions();
   void resolveDefinitions(ProbeNode *node);
+  void resolveDefinitions(DriveNode *node);
+  void resolveDefinitionValue(DriveNode *node);
+  void resolveDefinitionCondition(DriveNode *node);
 
   void insertBlockArgs();
   bool insertBlockArgs(BlockEntry *node);
@@ -556,14 +662,20 @@ struct Promoter {
   /// establishes a deterministic order for slot allocations, such that
   /// everything else in the pass can operate using unordered maps and sets.
   SmallVector<Value> slots;
-  /// The inverse of `slots`.
-  SmallDenseMap<Value, unsigned> slotOrder;
+  /// A mapping from projections to the root slot they are projecting into.
+  SmallDenseMap<Value, Value> projections;
+  /// A set of all promotable signal SSA values. This is the union of `slots`
+  /// and `projections` of those slots.
+  SmallDenseSet<Value> promotable;
 
   /// The lattice used to propagate needed definitions backwards and reaching
   /// definitions forwards.
   Lattice lattice;
   /// A worklist of lattice nodes used within calls to `propagate*`.
   SmallPtrSet<LatticeNode *, 4> dirtyNodes;
+
+  /// Helper to clean up unused ops.
+  UnusedOpPruner pruner;
 };
 } // namespace
 
@@ -620,38 +732,85 @@ LogicalResult Promoter::promote() {
   // Insert the necessary block arguments.
   insertBlockArgs();
 
+  // Erase operations that have become unused.
+  pruner.eraseNow();
+
   return success();
 }
 
 /// Identify any promotable slots probed or driven under the current region.
 void Promoter::findPromotableSlots() {
   SmallPtrSet<Value, 8> seenSlots;
+  SmallPtrSet<Operation *, 8> checkedUsers;
+  SmallVector<Operation *, 8> userWorklist;
+
   region.walk([&](Operation *op) {
     for (auto operand : op->getOperands()) {
       if (!seenSlots.insert(operand).second)
         continue;
 
-      // Ensure the slot is not used in any way we cannot reason about.
+      // We can only promote probes and drives on a locally-defined signal.
+      // Other signals, such as the ones brought into a module through a port,
+      // have an unknown aliasing relationship with the other ports.
       if (!operand.getDefiningOp<llhd::SignalOp>())
         continue;
-      if (!llvm::all_of(operand.getUsers(), [&](auto *user) {
-            // We don't support nested probes and drives.
-            if (region.isProperAncestor(user->getParentRegion()))
+
+      // Ensure the slot is not used in any way we cannot reason about.
+      auto checkUser = [&](Operation *user) -> bool {
+        // We don't support nested probes and drives.
+        if (region.isProperAncestor(user->getParentRegion()))
+          return false;
+        // Ignore uses outside of the region.
+        if (user->getParentRegion() != &region)
+          return true;
+        // Projection operations are okay as long as they are in the same block
+        // as any of their users.
+        if (isa<SigArrayGetOp, SigExtractOp>(user)) {
+          for (auto *projectionUser : user->getUsers()) {
+            if (projectionUser->getBlock() != user->getBlock())
               return false;
-            // Ignore uses outside of the region.
-            if (user->getParentRegion() != &region)
-              return true;
-            return isa<PrbOp>(user) || isBlockingDrive(user) ||
-                   isDeltaDrive(user);
+            if (checkedUsers.insert(projectionUser).second)
+              userWorklist.push_back(projectionUser);
+          }
+          projections.insert({user->getResult(0), operand});
+          return true;
+        }
+        return isa<PrbOp>(user) || isBlockingDrive(user) || isDeltaDrive(user);
+      };
+      checkedUsers.clear();
+      if (!llvm::all_of(operand.getUsers(), [&](auto *user) {
+            auto allOk = true;
+            if (checkedUsers.insert(user).second)
+              userWorklist.push_back(user);
+            while (!userWorklist.empty() && allOk)
+              allOk &= checkUser(userWorklist.pop_back_val());
+            userWorklist.clear();
+            return allOk;
           }))
         continue;
 
-      slotOrder.insert({operand, slots.size()});
       slots.push_back(operand);
     }
   });
 
-  LLVM_DEBUG(llvm::dbgs() << "Found " << slots.size() << " promotable slots\n");
+  // Populate `promotable` with the slots and projections we are promoting.
+  promotable.insert(slots.begin(), slots.end());
+  for (auto [projection, slot] : llvm::make_early_inc_range(projections))
+    if (!promotable.contains(slot))
+      projections.erase(projection);
+  for (auto [projection, slot] : projections)
+    promotable.insert(projection);
+
+  LLVM_DEBUG(llvm::dbgs() << "Found " << slots.size() << " promotable slots, "
+                          << promotable.size() << " promotable values\n");
+}
+
+/// Resolve SSA values in `projection` to the `slot` they are projecting into.
+/// Simply returns the given value if it is not in `projections`.
+Value Promoter::resolveSlot(Value projectionOrSlot) {
+  if (auto slot = projections.lookup(projectionOrSlot))
+    return slot;
+  return projectionOrSlot;
 }
 
 /// Explicitly capture any probes that are live across an `llhd.wait` as block
@@ -789,10 +948,11 @@ void Promoter::constructLattice() {
     for (auto &op : block.without_terminator()) {
       // Handle probes.
       if (auto probeOp = dyn_cast<PrbOp>(op)) {
-        if (!slotOrder.contains(probeOp.getSignal()))
+        if (!promotable.contains(probeOp.getSignal()))
           continue;
-        auto *node = lattice.createNode<ProbeNode>(probeOp, valueBefore,
-                                                   lattice.createValue());
+        auto *node = lattice.createNode<ProbeNode>(
+            probeOp, resolveSlot(probeOp.getSignal()), valueBefore,
+            lattice.createValue());
         valueBefore = node->valueAfter;
         continue;
       }
@@ -801,14 +961,21 @@ void Promoter::constructLattice() {
       if (auto driveOp = dyn_cast<DrvOp>(op)) {
         if (!isBlockingDrive(&op) && !isDeltaDrive(&op))
           continue;
-        if (!slotOrder.contains(driveOp.getSignal()))
+        if (!promotable.contains(driveOp.getSignal()))
           continue;
         auto condition = DriveCondition::always();
         if (auto enable = driveOp.getEnable())
           condition = DriveCondition::conditional(enable);
-        auto *def = lattice.createDef(driveOp.getValue(), condition);
-        auto *node = lattice.createNode<DriveNode>(driveOp, def, valueBefore,
-                                                   lattice.createValue());
+        // Drives that target a slot directly provide the driven value as a
+        // definition for the slot. Drives to projections have their value
+        // calculated later on.
+        auto slot = resolveSlot(driveOp.getSignal());
+        auto *def = driveOp.getSignal() == slot
+                        ? lattice.createDef(driveOp.getValue(), condition)
+                        : lattice.createDef(driveOp->getBlock(),
+                                            getStoredType(slot), condition);
+        auto *node = lattice.createNode<DriveNode>(
+            driveOp, slot, def, valueBefore, lattice.createValue());
         valueBefore = node->valueAfter;
         continue;
       }
@@ -854,11 +1021,17 @@ void Promoter::propagateBackward(LatticeNode *node) {
     return;
   }
 
-  // Blocking drives kill the need for a definition to be available, since they
-  // provide a definition themselves.
+  // Blocking unconditional drives to an entire slot kill the need for a
+  // definition to be available, since they provide a definition themselves.
+  // Conditional drives propagate the need for a definition, since they have to
+  // forward an incoming reaching def in case they are disabled. Drives to
+  // projections need a definition to be available such that they can partially
+  // update it.
   if (auto *drive = dyn_cast<DriveNode>(node)) {
     auto needed = drive->valueAfter->neededDefs;
-    if (!isDelayed(drive->slot))
+    if (drive->drivesProjection())
+      needed.insert(getSlot(drive->slot));
+    else if (!isDelayed(drive->slot) && !drive->getDriveOp().getEnable())
       needed.erase(getSlot(drive->slot));
     update(drive->valueBefore, needed);
     return;
@@ -931,6 +1104,23 @@ void Promoter::propagateForward(LatticeNode *node, bool optimisticMerges) {
   // (B), because it in turn happens earlier.
   if (auto *drive = dyn_cast<DriveNode>(node)) {
     auto reaching = drive->valueBefore->reachingDefs;
+
+    // If the drive is conditional or driving a projection of a slot, merge any
+    // incoming reaching def into the reaching def created by the drive. This is
+    // necessary since a conditional drive following an unconditional drive may
+    // have to insert a multiplexer to forward to subsequent probes.
+    if (drive->drivesProjection() || drive->getDriveOp().getEnable()) {
+      auto *inDef = reaching.lookup(drive->slot);
+      if (inDef) {
+        if (drive->def->value != inDef->value)
+          drive->def->value = {};
+        if (inDef->condition.isAlways() || drive->def->condition.isAlways())
+          drive->def->condition = DriveCondition::always();
+        else if (drive->def->condition != inDef->condition)
+          drive->def->condition = DriveCondition::conditional();
+      }
+    }
+
     reaching[drive->slot] = drive->def;
     if (!isDelayed(drive->slot))
       reaching.erase(delayedSlot(getSlot(drive->slot)));
@@ -943,8 +1133,10 @@ void Promoter::propagateForward(LatticeNode *node, bool optimisticMerges) {
   if (auto *entry = dyn_cast<BlockEntry>(node)) {
     // Propagate reaching definitions for each inserted probe.
     SmallDenseMap<DefSlot, Def *, 1> reaching;
-    for (auto [slot, insertedProbe] : entry->insertedProbes)
+    for (auto [slot, insertedProbe] : entry->insertedProbes) {
       reaching[blockingSlot(slot)] = insertedProbe;
+      reaching[delayedSlot(slot)] = insertedProbe;
+    }
 
     // Propagate reaching definitions from predecessors, creating new
     // definitions in case of a merge.
@@ -1228,14 +1420,11 @@ void Promoter::insertDrives(BlockExit *node) {
 /// Remove drives to slots that we are promoting. These have been replaced with
 /// new drives at block exits.
 void Promoter::insertDrives(DriveNode *node) {
-  if (!slotOrder.contains(getSlot(node->slot)))
+  if (!promotable.contains(getSlot(node->slot)))
     return;
   LLVM_DEBUG(llvm::dbgs() << "- Removing drive " << *node->op << "\n");
-  auto *delayOp = cast<DrvOp>(node->op).getTime().getDefiningOp();
-  node->op->erase();
+  pruner.eraseNow(node->op);
   node->op = nullptr;
-  if (delayOp && isOpTriviallyDead(delayOp))
-    delayOp->erase();
 }
 
 //===----------------------------------------------------------------------===//
@@ -1244,21 +1433,122 @@ void Promoter::insertDrives(DriveNode *node) {
 
 /// Forward definitions throughout the IR.
 void Promoter::resolveDefinitions() {
-  for (auto *node : lattice.nodes)
+  for (auto *node : lattice.nodes) {
     if (auto *probe = dyn_cast<ProbeNode>(node))
       resolveDefinitions(probe);
+    else if (auto *drive = dyn_cast<DriveNode>(node))
+      resolveDefinitions(drive);
+  }
 }
 
 /// Replace probes with the corresponding reaching definition.
 void Promoter::resolveDefinitions(ProbeNode *node) {
-  if (!slotOrder.contains(node->slot))
+  if (!promotable.contains(node->slot))
     return;
   auto *def = node->valueBefore->reachingDefs.lookup(blockingSlot(node->slot));
   assert(def && "no definition reaches probe");
+
+  // Gather any projections between the probe and the underlying slot.
+  auto projections = getProjections(node->op->getOperand(0), node->slot);
+
+  // Extract the projected value from the aggregate.
+  auto builder = OpBuilder(node->op);
+  auto value = def->getValueOrPlaceholder();
+  value = unpackProjections(builder, value, projections);
+
+  // Replace the probe result with the projected value.
   LLVM_DEBUG(llvm::dbgs() << "- Replacing " << *node->op << "\n");
-  replaceValueWith(node->op->getResult(0), def->getValueOrPlaceholder());
-  node->op->erase();
+  replaceValueWith(node->op->getResult(0), value);
+  pruner.eraseNow(node->op);
   node->op = nullptr;
+}
+
+/// Mutate reaching definitions for conditional drives or drives that target
+/// projections of a slot.
+void Promoter::resolveDefinitions(DriveNode *node) {
+  if (!promotable.contains(getSlot(node->slot)))
+    return;
+
+  // Check whether the drive already has a value and condition set for its
+  // reaching def. This is the case for drives to an entire slot. Conditional
+  // drives and drives to a projection will have no value set initially, in
+  // which case either the value is null or it is a placeholder.
+  if (!node->def->value || node->def->valueIsPlaceholder)
+    resolveDefinitionValue(node);
+  if (node->def->condition.isConditional() &&
+      (!node->def->condition.getCondition() ||
+       node->def->conditionIsPlaceholder))
+    resolveDefinitionCondition(node);
+}
+
+void Promoter::resolveDefinitionValue(DriveNode *node) {
+  // Get the slot definition reaching the drive. This is the value the drive has
+  // to update.
+  auto *inDef = node->valueBefore->reachingDefs.lookup(node->slot);
+  assert(inDef && "no definition reaches drive");
+  auto driveOp = node->getDriveOp();
+  LLVM_DEBUG(llvm::dbgs() << "- Injecting value for " << driveOp << "\n");
+
+  // Gather any projections between the drive and the underlying slot.
+  auto projections = getProjections(driveOp.getSignal(), getSlot(node->slot));
+
+  // Extract the current value from the aggregate.
+  auto builder = OpBuilder(driveOp);
+  auto value = inDef->getValueOrPlaceholder();
+  value = unpackProjections(builder, value, projections);
+
+  // Update the value according to the drive.
+  pruner.eraseLaterIfUnused(value);
+  if (!driveOp.getEnable())
+    value = driveOp.getValue();
+  else
+    value = builder.createOrFold<comb::MuxOp>(
+        driveOp.getLoc(), driveOp.getEnable(), driveOp.getValue(), value);
+
+  // Inject the updated value into the aggregate.
+  value = packProjections(builder, value, projections);
+
+  // Track the updated slot value in the drive's reaching def.
+  if (node->def->valueIsPlaceholder) {
+    auto *placeholder = node->def->value.getDefiningOp();
+    assert(isa_and_nonnull<UnrealizedConversionCastOp>(placeholder) &&
+           "placeholder replaced but valueIsPlaceholder still set");
+    replaceValueWith(placeholder->getResult(0), value);
+    pruner.eraseNow(placeholder);
+    node->def->valueIsPlaceholder = false;
+  }
+  node->def->value = value;
+}
+
+void Promoter::resolveDefinitionCondition(DriveNode *node) {
+  // Get the slot definition reaching the drive. This contains the condition the
+  // drive has to update.
+  auto *inDef = node->valueBefore->reachingDefs.lookup(node->slot);
+  assert(inDef && "no definition reaches drive");
+  auto driveOp = node->getDriveOp();
+  LLVM_DEBUG(llvm::dbgs() << "- Mutating condition for " << driveOp << "\n");
+  OpBuilder builder(driveOp);
+
+  // Adjust the drive condition by combining the incoming condition with the
+  // enable of this drive op.
+  Value condition;
+  if (inDef->condition.isNever())
+    condition = driveOp.getEnable();
+  else
+    condition =
+        builder.createOrFold<comb::OrOp>(driveOp.getLoc(), driveOp.getEnable(),
+                                         inDef->getConditionOrPlaceholder());
+
+  // Track the updated drive condition in the drive's reaching def.
+  if (node->def->conditionIsPlaceholder) {
+    auto *placeholder = node->def->condition.getCondition().getDefiningOp();
+    assert(isa_and_nonnull<UnrealizedConversionCastOp>(placeholder) &&
+           "placeholder replaced but conditionIsPlaceholder still set");
+    replaceValueWith(placeholder->getResult(0), condition);
+    pruner.eraseNow(placeholder);
+    node->def->conditionIsPlaceholder = false;
+  }
+  node->def->condition.setCondition(condition);
 }
 
 //===----------------------------------------------------------------------===//
@@ -1324,7 +1614,7 @@ bool Promoter::insertBlockArgs(BlockEntry *node) {
              "placeholder replaced but valueIsPlaceholder still set");
       auto arg = node->block->addArgument(getStoredType(slot), getLoc(slot));
       replaceValueWith(placeholder->getResult(0), arg);
-      placeholder->erase();
+      pruner.eraseNow(placeholder);
       def->value = arg;
       def->valueIsPlaceholder = false;
       break;
@@ -1339,7 +1629,7 @@ bool Promoter::insertBlockArgs(BlockEntry *node) {
       auto conditionArg = node->block->addArgument(
           IntegerType::get(region.getContext(), 1), getLoc(slot));
       replaceValueWith(placeholder->getResult(0), conditionArg);
-      placeholder->erase();
+      pruner.eraseNow(placeholder);
       def->condition.setCondition(conditionArg);
       def->conditionIsPlaceholder = false;
       break;

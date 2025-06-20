@@ -31,8 +31,9 @@ add_circt_dialect_library(CIRCTHW
 
   DEPENDS
   MLIRHWIncGen
-  MLIRHWAttrIncGen
-  MLIRHWEnumsIncGen
+  CIRCTHWAttrIncGen
+  CIRCTHWEnumsIncGen
+  CIRCTHWCanonicalizationIncGen
 
   LINK_COMPONENTS
   Support
