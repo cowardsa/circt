@@ -7,6 +7,8 @@ target_link_libraries(circt-synth
   CIRCTAIGAnalysis
   CIRCTComb
   CIRCTCombToAIG
+  CIRCTCombToDatapath
+  CIRCTDatapathToComb
   CIRCTDebug
   CIRCTEmit
   CIRCTHW

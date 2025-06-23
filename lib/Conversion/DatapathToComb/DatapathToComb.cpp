@@ -205,7 +205,8 @@ static void
 populateDatapathToCombConversionPatterns(RewritePatternSet &patterns) {
   patterns.add<
       // Arithmetic Ops
-      DatapathPartialProductOpConversion, DatapathCompressOpConversion
+      DatapathCompressOpConversion,
+      DatapathPartialProductOpConversion
       >
       (patterns.getContext());
 }

@@ -13,6 +13,8 @@
 
 #include "circt/Conversion/AIGToComb.h"
 #include "circt/Conversion/CombToAIG.h"
+#include "circt/Conversion/CombToDatapath.h"
+#include "circt/Conversion/DatapathToComb.h"
 #include "circt/Dialect/AIG/AIGDialect.h"
 #include "circt/Dialect/AIG/AIGPasses.h"
 #include "circt/Dialect/AIG/Analysis/LongestPathAnalysis.h"
@@ -100,6 +102,10 @@ static cl::opt<bool>
     convertToComb("convert-to-comb",
                   cl::desc("Convert AIG to Comb at the end of the pipeline"),
                   cl::init(false), cl::cat(mainCategory));
+static cl::opt<bool>
+    skipDatpath("skip-datapath-opt",
+                  cl::desc("Disable datapath optimization passes"),
+                  cl::init(false), cl::cat(mainCategory));                  
 
 static cl::opt<std::string>
     outputLongestPath("output-longest-path",
@@ -131,6 +137,13 @@ static void partiallyLegalizeCombToAIG(SmallVectorImpl<std::string> &ops) {
 
 static void populateSynthesisPipeline(PassManager &pm) {
   auto pipeline = [](OpPassManager &mpm) {
+
+    if (!skipDatpath) {
+      mpm.addPass(createConvertCombToDatapath());
+      mpm.addPass(createSimpleCanonicalizerPass());
+      mpm.addPass(createConvertDatapathToComb());
+    }
+
     // Add the AIG to Comb at the scope exit if requested.
     auto addAIGToComb = llvm::make_scope_exit([&]() {
       if (convertToComb) {
