@@ -30,12 +30,6 @@ using namespace comb;
 // Utility Functions
 //===----------------------------------------------------------------------===//
 
-// A wrapper for comb::extractBits that returns a SmallVector<Value>.
-static SmallVector<Value> extractBits(OpBuilder &builder, Value val) {
-  SmallVector<Value> bits;
-  comb::extractBits(builder, val, bits);
-  return bits;
-}
 
 //===----------------------------------------------------------------------===//
 // Conversion patterns
