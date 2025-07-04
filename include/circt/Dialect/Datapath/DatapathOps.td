@@ -1,4 +1,4 @@
-//===- DatapathOps.td - datapath ops ----------*- tablegen -*-===//
+//===----------------------------------------------------------------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -15,9 +15,6 @@
 
 include "circt/Dialect/Datapath/DatapathDialect.td"
 include "mlir/Interfaces/InferTypeOpInterface.td"
-include "mlir/IR/OpAsmInterface.td"
-include "mlir/IR/SymbolInterfaces.td"
-include "mlir/IR/EnumAttr.td"
 include "mlir/Interfaces/SideEffectInterfaces.td"
 
 include "circt/Dialect/HW/HWTypes.td"

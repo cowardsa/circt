@@ -8,8 +8,6 @@ add_circt_dialect_library(CIRCTDatapath
 
   DEPENDS
   CIRCTComb
-  # MLIRCombIncGen
-  # MLIRCombEnumsIncGen
   
   LINK_COMPONENTS
   Support
