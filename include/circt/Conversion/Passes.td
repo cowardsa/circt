@@ -885,6 +885,10 @@ def ConvertDatapathToComb : Pass<"convert-datapath-to-comb"> {
     "circt::datapath::DatapathDialect",
     "circt::hw::HWDialect"
   ];
+  let options = [
+    Option<"lowerCompressToAdd", "lower-compress-to-add", "bool", "false",
+           "Lower compress operators to variadic add.">
+  ];
 }
 
 #endif // CIRCT_CONVERSION_PASSES_TD

@@ -166,6 +166,7 @@ static void populateSynthesisPipeline(PassManager &pm) {
       mpm.addPass(createConvertCombToDatapath());
       mpm.addPass(createSimpleCanonicalizerPass());
       mpm.addPass(createConvertDatapathToComb());
+      mpm.addPass(createSimpleCanonicalizerPass());
     }
 
     // Add the AIG to Comb at the scope exit if requested.
