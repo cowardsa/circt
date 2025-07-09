@@ -73,6 +73,43 @@ struct CompressOpConversion : OpConversionPattern<CompressOp> {
   }
 };
 
+struct PartialProductOpConversion : OpConversionPattern<PartialProductOp> {
+  using OpConversionPattern<PartialProductOp>::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(PartialProductOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+
+    ValueRange operands = op.getOperands();
+    ValueRange results = op.getResults();
+
+    auto mulResult =
+        rewriter.create<smt::BVMulOp>(op.getLoc(), operands[0], operands[1]);
+
+    SmallVector<Value, 2> newResults;
+    Value resultRunner;
+    for (Value result : results) {
+      auto declareFunOp = rewriter.create<smt::DeclareFunOp>(
+          op.getLoc(), typeConverter->convertType(result.getType()));
+      newResults.push_back(declareFunOp.getResult());
+      if (newResults.size() > 1)
+        resultRunner = rewriter.create<smt::BVAddOp>(op.getLoc(), resultRunner,
+                                                     declareFunOp);
+      else
+        resultRunner = declareFunOp;
+    }
+
+    auto premise =
+        rewriter.create<smt::EqOp>(op.getLoc(), mulResult, resultRunner);
+    rewriter.create<smt::AssertOp>(op.getLoc(), premise);
+
+    if (newResults.size() != results.size())
+      return rewriter.notifyMatchFailure(op, "expected same number of results");
+
+    rewriter.replaceOp(op, newResults);
+    return success();
+  }
+};
 } // namespace
 
 //===----------------------------------------------------------------------===//
@@ -88,7 +125,8 @@ struct ConvertDatapathToSMTPass
 
 void circt::populateDatapathToSMTConversionPatterns(
     TypeConverter &converter, RewritePatternSet &patterns) {
-  patterns.add<CompressOpConversion>(converter, patterns.getContext());
+  patterns.add<CompressOpConversion, PartialProductOpConversion>(
+      converter, patterns.getContext());
 }
 
 void ConvertDatapathToSMTPass::runOnOperation() {
@@ -98,6 +136,7 @@ void ConvertDatapathToSMTPass::runOnOperation() {
 
   RewritePatternSet patterns(&getContext());
   TypeConverter converter;
+  populateHWToSMTTypeConverter(converter);
   populateDatapathToSMTConversionPatterns(converter, patterns);
 
   if (failed(mlir::applyPartialConversion(getOperation(), target,
