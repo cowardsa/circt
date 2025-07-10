@@ -15,7 +15,7 @@ namespace circt {
 
 /// Get the HW to SMT conversion patterns.
 void populateDatapathToSMTConversionPatterns(TypeConverter &converter,
-                                         RewritePatternSet &patterns);
+                                             RewritePatternSet &patterns);
 
 #define GEN_PASS_DECL_CONVERTDATAPATHTOSMT
 #include "circt/Conversion/Passes.h.inc"
