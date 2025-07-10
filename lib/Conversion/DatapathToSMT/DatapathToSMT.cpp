@@ -28,6 +28,11 @@ using namespace datapath;
 //===----------------------------------------------------------------------===//
 
 namespace {
+
+// Lower to an SMT assertion that summing the results is equivalent to summing
+// the compress inputs
+// d:2 = compress(a, b, c) ->
+// assert(d#0 + d#1 == a + b + c)
 struct CompressOpConversion : OpConversionPattern<CompressOp> {
   using OpConversionPattern<CompressOp>::OpConversionPattern;
 
@@ -36,18 +41,15 @@ struct CompressOpConversion : OpConversionPattern<CompressOp> {
                   ConversionPatternRewriter &rewriter) const override {
 
     ValueRange operands = adaptor.getOperands();
-    if (operands.size() < 3)
-      return failure();
-
     ValueRange results = op.getResults();
-    if (results.size() < 2)
-      return failure();
 
+    // Sum operands
     Value operandRunner = operands[0];
     for (Value operand : operands.drop_front())
       operandRunner =
           rewriter.create<smt::BVAddOp>(op.getLoc(), operandRunner, operand);
 
+    // Create free variables and sum them
     SmallVector<Value, 2> newResults;
     Value resultRunner;
     for (Value result : results) {
@@ -61,8 +63,10 @@ struct CompressOpConversion : OpConversionPattern<CompressOp> {
         resultRunner = declareFunOp;
     }
 
+    // Assert sum operands == sum results (free variables)
     auto premise =
         rewriter.create<smt::EqOp>(op.getLoc(), operandRunner, resultRunner);
+    // Encode via an assertion (could be relaxed to an assumption).
     rewriter.create<smt::AssertOp>(op.getLoc(), premise);
 
     if (newResults.size() != results.size())
@@ -73,6 +77,10 @@ struct CompressOpConversion : OpConversionPattern<CompressOp> {
   }
 };
 
+// Lower to an SMT assertion that summing the results is equivalent to the
+// product of the partial_product inputs
+// c:<N> = partial_product(a, b) ->
+// assert(c#0 + ... + c#<N-1> == a * b)
 struct PartialProductOpConversion : OpConversionPattern<PartialProductOp> {
   using OpConversionPattern<PartialProductOp>::OpConversionPattern;
 
@@ -83,10 +91,12 @@ struct PartialProductOpConversion : OpConversionPattern<PartialProductOp> {
     ValueRange operands = op.getOperands();
     ValueRange results = op.getResults();
 
+    // Multiply the operands
     auto mulResult =
         rewriter.create<smt::BVMulOp>(op.getLoc(), operands[0], operands[1]);
 
-    SmallVector<Value, 2> newResults;
+    // Create free variables and sum them
+    SmallVector<Value> newResults;
     Value resultRunner;
     for (Value result : results) {
       auto declareFunOp = rewriter.create<smt::DeclareFunOp>(
@@ -99,8 +109,10 @@ struct PartialProductOpConversion : OpConversionPattern<PartialProductOp> {
         resultRunner = declareFunOp;
     }
 
+    // Assert product of operands == sum results (free variables)
     auto premise =
         rewriter.create<smt::EqOp>(op.getLoc(), mulResult, resultRunner);
+    // Encode via an assertion (could be relaxed to an assumption).
     rewriter.create<smt::AssertOp>(op.getLoc(), premise);
 
     if (newResults.size() != results.size())
