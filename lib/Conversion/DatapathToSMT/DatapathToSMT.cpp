@@ -49,19 +49,19 @@ struct CompressOpConversion : OpConversionPattern<CompressOp> {
       operandRunner =
           rewriter.create<smt::BVAddOp>(op.getLoc(), operandRunner, operand);
 
-    // Create free variables and sum them
+    // Create free variables
     SmallVector<Value, 2> newResults;
-    Value resultRunner;
     for (Value result : results) {
       auto declareFunOp = rewriter.create<smt::DeclareFunOp>(
           op.getLoc(), typeConverter->convertType(result.getType()));
       newResults.push_back(declareFunOp.getResult());
-      if (newResults.size() > 1)
-        resultRunner = rewriter.create<smt::BVAddOp>(op.getLoc(), resultRunner,
-                                                     declareFunOp);
-      else
-        resultRunner = declareFunOp;
     }
+
+    // Sum the free variables
+    Value resultRunner = newResults.front();
+    for (auto freeVar : llvm::drop_begin(newResults, 1))
+      resultRunner =
+          rewriter.create<smt::BVAddOp>(op.getLoc(), resultRunner, freeVar);
 
     // Assert sum operands == sum results (free variables)
     auto premise =
@@ -88,26 +88,26 @@ struct PartialProductOpConversion : OpConversionPattern<PartialProductOp> {
   matchAndRewrite(PartialProductOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
 
-    ValueRange operands = op.getOperands();
+    ValueRange operands = adaptor.getOperands();
     ValueRange results = op.getResults();
 
     // Multiply the operands
     auto mulResult =
         rewriter.create<smt::BVMulOp>(op.getLoc(), operands[0], operands[1]);
 
-    // Create free variables and sum them
-    SmallVector<Value> newResults;
-    Value resultRunner;
+    // Create free variables
+    SmallVector<Value, 2> newResults;
     for (Value result : results) {
       auto declareFunOp = rewriter.create<smt::DeclareFunOp>(
           op.getLoc(), typeConverter->convertType(result.getType()));
       newResults.push_back(declareFunOp.getResult());
-      if (newResults.size() > 1)
-        resultRunner = rewriter.create<smt::BVAddOp>(op.getLoc(), resultRunner,
-                                                     declareFunOp);
-      else
-        resultRunner = declareFunOp;
     }
+
+    // Sum the free variables
+    Value resultRunner = newResults.front();
+    for (auto freeVar : llvm::drop_begin(newResults, 1))
+      resultRunner =
+          rewriter.create<smt::BVAddOp>(op.getLoc(), resultRunner, freeVar);
 
     // Assert product of operands == sum results (free variables)
     auto premise =
