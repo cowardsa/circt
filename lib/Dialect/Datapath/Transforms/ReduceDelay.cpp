@@ -137,6 +137,130 @@ struct FoldMuxAdd : public OpRewritePattern<comb::AddOp> {
     return success();
   }
 };
+
+struct CombICmpOpConversion : public OpRewritePattern<comb::ICmpOp> {
+  using OpRewritePattern::OpRewritePattern;
+
+  // Applicable to unsigned comparisons without overflow:
+  // a + b < c + d
+  // -->
+  // msb( {0,a} + {0,b} - {0,c} - {0,d} )
+  LogicalResult matchAndRewrite(comb::ICmpOp op,
+                                PatternRewriter &rewriter) const override {
+    Value lhs = op.getLhs();
+    Value rhs = op.getRhs();
+    auto width = lhs.getType().getIntOrFloatBitWidth();
+
+    // Only unsigned comparisons
+    if (op.getPredicate() != comb::ICmpPredicate::ult &&
+        op.getPredicate() != comb::ICmpPredicate::ule &&
+        op.getPredicate() != comb::ICmpPredicate::ugt &&
+        op.getPredicate() != comb::ICmpPredicate::uge)
+      return failure();
+
+    // a < b -> a - b < 0
+    // a > b -> b - a < 0
+    bool lhsMinusRhs = op.getPredicate() == comb::ICmpPredicate::ult ||
+                       op.getPredicate() == comb::ICmpPredicate::uge;
+
+    // a >= b -> !(a < b) -> !(a - b < 0)
+    // a <= b -> !(a > b) -> !(b - a < 0)
+    bool negate = op.getPredicate() == comb::ICmpPredicate::uge ||
+                  op.getPredicate() == comb::ICmpPredicate::ule;
+
+    // Compute rhs - lhs
+    if (!lhsMinusRhs)
+      std::swap(lhs, rhs);
+    // Check if input is zero extended
+    auto extLhsBy = isZeroExtendBy(lhs);
+    SmallVector<Value> lhsAddends = {lhs};
+    // Detect adder inputs to either side of the comparison and detect overflow
+    if (comb::AddOp lhsAdd = lhs.getDefiningOp<comb::AddOp>()) {
+      auto canFold = true;
+      for (auto addend : lhsAdd.getOperands())
+        canFold &= (isZeroExtendBy(addend) > 0);
+
+      if (canFold)
+        lhsAddends = lhsAdd.getOperands();
+    }
+
+    auto extRhsBy = isZeroExtendBy(rhs);
+    SmallVector<Value> rhsAddends = {rhs};
+    // Detect adder inputs to either side of the comparison and detect overflow
+    if (comb::AddOp rhsAdd = rhs.getDefiningOp<comb::AddOp>()) {
+      auto canFold = true;
+      for (auto addend : rhsAdd.getOperands())
+        canFold &= (isZeroExtendBy(addend) > 0);
+
+      if (canFold)
+        rhsAddends = rhsAdd.getOperands();
+    }
+
+    // No benefit to folding into a single addition
+    if (lhsAddends.size() + rhsAddends.size() < 3)
+      return failure();
+
+    auto lhsExtendValue =
+        hw::ConstantOp::create(rewriter, op.getLoc(), APInt(extLhsBy + 1, 0));
+    auto rhsExtendValue =
+        hw::ConstantOp::create(rewriter, op.getLoc(), APInt(extRhsBy + 1, 0));
+    SmallVector<Value> lhsExtend;
+    for (auto addend : lhsAddends) {
+      auto ext = rewriter.create<comb::ConcatOp>(
+          op.getLoc(), ValueRange{lhsExtendValue, addend});
+      lhsExtend.push_back(ext);
+    }
+
+    auto invert = hw::ConstantOp::create(
+        rewriter, op.getLoc(),
+        APInt::getAllOnes(width + 1)); // for two's complement negation
+    SmallVector<Value> rhsExtend;
+    for (auto addend : rhsAddends) {
+      auto ext = rewriter.create<comb::ConcatOp>(
+          op.getLoc(), ValueRange{rhsExtendValue, addend});
+      auto negated =
+          rewriter.create<comb::XorOp>(op.getLoc(), ext, invert, true);
+      rhsExtend.push_back(negated);
+    }
+
+    rhsExtend.push_back(hw::ConstantOp::create(
+        rewriter, op.getLoc(), APInt(width + 1, rhsExtend.size())));
+
+    SmallVector<Value> allAddends;
+    llvm::append_range(allAddends, lhsExtend);
+    llvm::append_range(allAddends, rhsExtend);
+    auto add = rewriter.create<comb::AddOp>(op.getLoc(), allAddends, false);
+    auto msb = rewriter.createOrFold<comb::ExtractOp>(
+        op.getLoc(), add.getResult(), width, 1);
+
+    if (!negate) {
+      rewriter.replaceOp(op, msb);
+      return success();
+    }
+
+    auto trueValue = hw::ConstantOp::create(rewriter, op.getLoc(), APInt(1, 1));
+    auto notOp =
+        rewriter.create<comb::XorOp>(op.getLoc(), msb, trueValue, true);
+    rewriter.replaceOp(op, notOp.getResult());
+    return success();
+  }
+
+  static size_t isZeroExtendBy(Value &op) {
+    // TODO - make this more robust
+    if (comb::ConcatOp concat = op.getDefiningOp<comb::ConcatOp>()) {
+      auto extArg = concat.getOperands().front();
+      if (auto constOp =
+              dyn_cast_or_null<hw::ConstantOp>(extArg.getDefiningOp())) {
+        if (constOp.getValue().isZero()) {
+          op = concat.getOperands().back();
+          return constOp.getValue().getBitWidth();
+        }
+      }
+    }
+    return 0;
+  }
+};
+
 } // namespace
 
 namespace {

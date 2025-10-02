@@ -34,4 +34,11 @@ def CombIntRangeNarrowing : Pass<"comb-int-range-narrowing"> {
   }];
 }
 
+def CombIntRangeAnnotating : Pass<"comb-int-range-annotating"> {
+  let summary = "Annotate comb ops with integer range attributes.";
+  let description = [{
+    TODO
+  }];
+}
+
 #endif // CIRCT_DIALECT_COMB_PASSES_TD

@@ -114,6 +114,13 @@ struct CombIntRangeNarrowingPass
   using CombIntRangeNarrowingBase::CombIntRangeNarrowingBase;
   void runOnOperation() override;
 };
+
+// struct CombIntRangeAnnotatingPass
+//     : comb::impl::CombIntRangeAnnotatingBase<CombIntRangeAnnotatingPass> {
+
+//   using CombIntRangeAnnotatingBase::CombIntRangeAnnotatingBase;
+//   void runOnOperation() override;
+// };
 } // namespace
 
 void CombIntRangeNarrowingPass::runOnOperation() {
@@ -137,3 +144,19 @@ void comb::populateCombNarrowingPatterns(RewritePatternSet &patterns,
   patterns.add<CombOpNarrow<comb::AddOp>, CombOpNarrow<comb::MulOp>,
                CombOpNarrow<comb::SubOp>>(patterns.getContext(), solver);
 }
+
+// void CombIntRangeAnnotatingPass::runOnOperation() {
+//   Operation *op = getOperation();
+//   MLIRContext *ctx = op->getContext();
+//   DataFlowSolver solver;
+//   solver.load<DeadCodeAnalysis>();
+//   solver.load<IntegerRangeAnalysis>();
+//   if (failed(solver.initializeAndRun(op)))
+//     return signalPassFailure();
+
+//   RewritePatternSet patterns(ctx);
+//   populateCombNarrowingPatterns(patterns, solver);
+
+//   if (failed(applyPatternsGreedily(op, std::move(patterns))))
+//     signalPassFailure();
+// }
