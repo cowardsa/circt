@@ -55,23 +55,30 @@ struct CombOpAnnotate : public OpRewritePattern<CombOpTy> {
 
   LogicalResult matchAndRewrite(CombOpTy op,
                                 PatternRewriter &rewriter) const override {
-    if (op->hasAttr("comb.int_range.umin"))
+    if (op->hasAttr("comb.upper_bit_trunc"))
       return failure();
 
-    auto *maybeInferredRange = solver.lookupState<IntegerValueRangeLattice>(op);
-    if (!maybeInferredRange || maybeInferredRange->getValue().isUninitialized())
-      return failure();
+    if (op->getNumOperands() != 2 || op->getNumResults() != 1)
+      return rewriter.notifyMatchFailure(
+          op, "Only support binary operations with one result");
 
-    const ConstantIntRanges &inferredRange =
-        maybeInferredRange->getValue().getValue();
-    IntegerAttr min = IntegerAttr::get(
-        IntegerType::get(op.getContext(), inferredRange.umin().getBitWidth()),
-        inferredRange.umin());
-    op->setAttr("comb.int_range.umin", min);
-    IntegerAttr max = IntegerAttr::get(
-        IntegerType::get(op.getContext(), inferredRange.umax().getBitWidth()),
-        inferredRange.umax());
-    op->setAttr("comb.int_range.umax", max);
+    SmallVector<ConstantIntRanges> ranges;
+    if (failed(collectRanges(solver, op->getOperands(), ranges)))
+      return rewriter.notifyMatchFailure(op, "input without specified range");
+
+    bool overflowed = false;
+    auto a = ranges[0].umax();
+    auto b = ranges[1].umax();
+    if (isa<comb::AddOp>(op)) {
+      a.uadd_ov(b, overflowed);
+    } else if (isa<comb::MulOp>(op)) {
+      a.umul_ov(b, overflowed);
+    } else {
+      return rewriter.notifyMatchFailure(op, "unsupported comb op");
+    }
+
+    op->setAttr("comb.upper_bit_trunc",
+                BoolAttr::get(op->getContext(), overflowed));
     return success();
   }
 

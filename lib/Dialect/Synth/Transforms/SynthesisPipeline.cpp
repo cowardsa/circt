@@ -15,6 +15,7 @@
 #include "circt/Conversion/CombToSynth.h"
 #include "circt/Conversion/DatapathToComb.h"
 #include "circt/Dialect/Comb/CombOps.h"
+#include "circt/Dialect/Comb/CombPasses.h"
 #include "circt/Dialect/Datapath/DatapathPasses.h"
 #include "circt/Dialect/HW/HWOps.h"
 #include "circt/Dialect/HW/HWPasses.h"
@@ -43,6 +44,7 @@ void circt::synth::buildCombLoweringPipeline(
     OpPassManager &pm, const CombLoweringPipelineOptions &options) {
   {
     if (!options.disableDatapath) {
+      pm.addPass(comb::createCombIntRangeAnnotating());
       pm.addPass(createConvertCombToDatapath());
       pm.addPass(createSimpleCanonicalizerPass());
       if (options.synthesisStrategy == OptimizationStrategyTiming) {

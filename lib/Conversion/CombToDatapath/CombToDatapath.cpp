@@ -47,8 +47,13 @@ struct CombAddOpConversion : OpConversionPattern<AddOp> {
     // Reduce to two values (carry,save)
     auto results = datapath::CompressOp::create(rewriter, op.getLoc(),
                                                 op.getOperands(), 2);
+
+    auto overflow = op->getAttrOfType<BoolAttr>("comb.upper_bit_trunc");
     // carry+saved
-    rewriter.replaceOpWithNewOp<AddOp>(op, results.getResults(), true);
+    auto newAdd =
+        rewriter.replaceOpWithNewOp<AddOp>(op, results.getResults(), true);
+    if (overflow && !newAdd->hasAttr("comb.upper_bit_trunc"))
+      newAdd->setAttr("comb.upper_bit_trunc", overflow);
     return success();
   }
 };
@@ -68,8 +73,12 @@ struct CombMulOpConversion : OpConversionPattern<MulOp> {
     // Create partial product rows - number of rows == width
     auto pp = datapath::PartialProductOp::create(rewriter, op.getLoc(),
                                                  op.getInputs(), width);
+    auto overflow = op->getAttrOfType<BoolAttr>("comb.upper_bit_trunc");
+
     // Sum partial products
-    rewriter.replaceOpWithNewOp<AddOp>(op, pp.getResults(), true);
+    auto newAdd = rewriter.replaceOpWithNewOp<AddOp>(op, pp.getResults(), true);
+    if (overflow && !newAdd->hasAttr("comb.upper_bit_trunc"))
+      newAdd->setAttr("comb.upper_bit_trunc", overflow);
     return success();
   }
 };

@@ -176,11 +176,8 @@ struct CombICmpOpConversion : public OpRewritePattern<comb::ICmpOp> {
     SmallVector<Value> lhsAddends = {lhs};
     // Detect adder inputs to either side of the comparison and detect overflow
     if (comb::AddOp lhsAdd = lhs.getDefiningOp<comb::AddOp>()) {
-      auto canFold = true;
-      for (auto addend : lhsAdd.getOperands())
-        canFold &= (isZeroExtendBy(addend) > 0);
-
-      if (canFold)
+      auto overflow = lhsAdd->getAttrOfType<BoolAttr>("comb.upper_bit_trunc");
+      if (overflow && !overflow.getValue())
         lhsAddends = lhsAdd.getOperands();
     }
 
@@ -188,11 +185,8 @@ struct CombICmpOpConversion : public OpRewritePattern<comb::ICmpOp> {
     SmallVector<Value> rhsAddends = {rhs};
     // Detect adder inputs to either side of the comparison and detect overflow
     if (comb::AddOp rhsAdd = rhs.getDefiningOp<comb::AddOp>()) {
-      auto canFold = true;
-      for (auto addend : rhsAdd.getOperands())
-        canFold &= (isZeroExtendBy(addend) > 0);
-
-      if (canFold)
+      auto overflow = rhsAdd->getAttrOfType<BoolAttr>("comb.upper_bit_trunc");
+      if (overflow && !overflow.getValue())
         rhsAddends = rhsAdd.getOperands();
     }
 
@@ -273,7 +267,7 @@ struct DatapathReduceDelayPass
     MLIRContext *ctx = op->getContext();
 
     RewritePatternSet patterns(ctx);
-    patterns.add<FoldAddReplicate, FoldMuxAdd>(ctx);
+    patterns.add<FoldAddReplicate, FoldMuxAdd, CombICmpOpConversion>(ctx);
 
     if (failed(applyPatternsGreedily(op, std::move(patterns))))
       signalPassFailure();
