@@ -15,6 +15,7 @@
 
 #include "mlir/Pass/Pass.h"
 #include "llvm/ADT/Twine.h"
+#include "llvm/Support/Debug.h"
 
 namespace circt {
 
@@ -41,6 +42,38 @@ llvm::raw_ostream &debugPassHeader(const mlir::Pass *pass, unsigned width = 80);
 ///
 ///    ===-----------------------------------===
 llvm::raw_ostream &debugFooter(unsigned width = 80);
+
+#ifndef NDEBUG
+/// RAII helper for creating a pass header and footer automatically.  The heaer
+/// is printed on construction and the footer on destruction.
+class ScopedDebugPassLogger {
+
+public:
+  ScopedDebugPassLogger(const mlir::Pass *pass, unsigned width = 80)
+      : pass(pass), width(width) {
+    if (::llvm::DebugFlag &&
+        ::llvm::isCurrentDebugType(pass->getArgument().data(), 1))
+      debugPassHeader(pass, width) << "\n";
+  }
+
+  ~ScopedDebugPassLogger() {
+    if (::llvm::DebugFlag &&
+        ::llvm::isCurrentDebugType(pass->getArgument().data(), 1))
+      debugFooter(width) << "\n";
+  }
+
+private:
+  const mlir::Pass *pass;
+  unsigned width;
+};
+
+#define CIRCT_DEBUG_SCOPED_PASS_LOGGER(PASS)                                   \
+  ScopedDebugPassLogger _scopedDebugPassLogger(PASS)
+#else
+#define CIRCT_DEBUG_SCOPED_PASS_LOGGER(PASS)                                   \
+  do {                                                                         \
+  } while (0)
+#endif
 
 } // namespace circt
 

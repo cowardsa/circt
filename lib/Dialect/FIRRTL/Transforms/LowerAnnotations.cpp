@@ -31,7 +31,7 @@
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/Support/Debug.h"
 
-#define DEBUG_TYPE "lower-annos"
+#define DEBUG_TYPE "firrtl-lower-annotations"
 
 namespace circt {
 namespace firrtl {
@@ -1177,12 +1177,8 @@ LogicalResult LowerAnnotationsPass::solveWiringProblems(ApplyState &state) {
     for (auto *inst : instanceGraph.lookup(fmodule)->uses()) {
       InstanceOp useInst = cast<InstanceOp>(inst->getInstance());
       auto enclosingModule = useInst->getParentOfType<FModuleOp>();
-      auto clonedInst = useInst.cloneAndInsertPorts(newPorts);
+      auto clonedInst = useInst.cloneWithInsertedPortsAndReplaceUses(newPorts);
       state.instancePathCache.replaceInstance(useInst, clonedInst);
-      // When RAUW-ing, ignore the new ports that we added when replacing (they
-      // cannot have uses).
-      useInst->replaceAllUsesWith(
-          clonedInst.getResults().drop_back(newPorts.size()));
       useInst->erase();
       // Record information in the moduleModifications strucutre for the module
       // _where this is instantiated_.  This is done so that when that module is
@@ -1210,10 +1206,10 @@ LogicalResult LowerAnnotationsPass::solveWiringProblems(ApplyState &state) {
 
 // This is the main entrypoint for the lowering pass.
 void LowerAnnotationsPass::runOnOperation() {
+  CIRCT_DEBUG_SCOPED_PASS_LOGGER(this);
+
   CircuitOp circuit = getOperation();
   SymbolTable modules(circuit);
-
-  LLVM_DEBUG(debugPassHeader(this) << "\n");
 
   // Grab the annotations from a non-standard attribute called "rawAnnotations".
   // This is a temporary location for all annotations that are earmarked for

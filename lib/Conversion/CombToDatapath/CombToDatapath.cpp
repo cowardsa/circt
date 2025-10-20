@@ -139,8 +139,10 @@ struct ConvertCombToDatapathPass
 
 static void
 populateCombToDatapathConversionPatterns(RewritePatternSet &patterns) {
-  patterns.add<CombAddOpConversion, CombMulOpConversion,
-               DatapathLowerVariadic<MulOp>>(patterns.getContext());
+  // patterns.add<CombAddOpConversion, CombMulOpConversion,
+  //              DatapathLowerVariadic<MulOp>>(patterns.getContext());
+  patterns.add<CombAddOpConversion, CombMulOpConversion>(patterns.getContext());
+  patterns.add(comb::convertSubToAdd);
 }
 
 void ConvertCombToDatapathPass::runOnOperation() {
@@ -154,8 +156,9 @@ void ConvertCombToDatapathPass::runOnOperation() {
       [](comb::AddOp op) { return op.getNumOperands() <= 2; });
   target.addIllegalOp<comb::MulOp>();
   // TODO: determine lowering of multi-input multipliers
-  // target.addDynamicallyLegalOp<comb::MulOp>(
-  //     [](comb::MulOp op) { return op.getNumOperands() > 2; });
+  target.addDynamicallyLegalOp<comb::MulOp>(
+      [](comb::MulOp op) { return op.getNumOperands() > 2; });
+  target.addIllegalOp<comb::SubOp>();
 
   RewritePatternSet patterns(&getContext());
   populateCombToDatapathConversionPatterns(patterns);

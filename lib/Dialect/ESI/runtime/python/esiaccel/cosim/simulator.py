@@ -81,10 +81,12 @@ class SimProcess:
   def __init__(self,
                proc: subprocess.Popen,
                port: int,
-               threads: Optional[List[threading.Thread]] = None):
+               threads: Optional[List[threading.Thread]] = None,
+               gui: bool = False):
     self.proc = proc
     self.port = port
     self.threads: List[threading.Thread] = threads or []
+    self.gui = gui
 
   def force_stop(self):
     """Make sure to stop the simulation no matter what."""
@@ -117,7 +119,8 @@ class Simulator:
                run_stderr_callback: Optional[Callable[[str], None]] = None,
                compile_stdout_callback: Optional[Callable[[str], None]] = None,
                compile_stderr_callback: Optional[Callable[[str], None]] = None,
-               make_default_logs: bool = True):
+               make_default_logs: bool = True,
+               macro_definitions: Optional[Dict[str, str]] = None):
     """Simulator base class.
 
     Optional sinks can be provided for capturing output. If not provided,
@@ -133,10 +136,13 @@ class Simulator:
       compile_stderr_callback: Line-based callback for compile stderr.
       make_default_logs: If True and corresponding callback is not supplied,
         create log file and emit via internally-created callback.
+      macro_definitions: Optional dictionary of macro definitions to be defined
+        during compilation.
     """
     self.sources = sources
     self.run_dir = run_dir
     self.debug = debug
+    self.macro_definitions = macro_definitions
 
     # Unified list of any log file handles we opened.
     self._default_files: List[IO[str]] = []
@@ -231,6 +237,10 @@ class Simulator:
     """
     self.run_dir.mkdir(parents=True, exist_ok=True)
 
+    env_gui = os.environ.get("COSIM_GUI", "0")
+    if env_gui != "0":
+      gui = True
+
     # Erase the config file if it exists. We don't want to read
     # an old config.
     portFileName = self.run_dir / "cosim.cfg"
@@ -280,7 +290,7 @@ class Simulator:
       if proc.poll() is not None:
         raise Exception("Simulation exited early")
       time.sleep(0.05)
-    return SimProcess(proc=proc, port=port, threads=threads)
+    return SimProcess(proc=proc, port=port, threads=threads, gui=gui)
 
   def _start_process_with_callbacks(
       self, cmd: List[str], env: Optional[Dict[str, str]], cwd: Optional[Path],
@@ -293,13 +303,22 @@ class Simulator:
     If wait is True, blocks until process completes and returns its exit code.
     If wait is False, returns the Popen object (threads keep streaming).
     """
-    proc = subprocess.Popen(cmd,
-                            stdout=subprocess.PIPE,
-                            stderr=subprocess.PIPE,
-                            env=env,
-                            cwd=cwd,
-                            text=True,
-                            preexec_fn=os.setsid)
+    if os.name == "posix":
+      proc = subprocess.Popen(cmd,
+                              stdout=subprocess.PIPE,
+                              stderr=subprocess.PIPE,
+                              env=env,
+                              cwd=cwd,
+                              text=True,
+                              preexec_fn=os.setsid)
+    else:  # windows
+      proc = subprocess.Popen(cmd,
+                              stdout=subprocess.PIPE,
+                              stderr=subprocess.PIPE,
+                              env=env,
+                              cwd=cwd,
+                              text=True,
+                              creationflags=subprocess.CREATE_NEW_PROCESS_GROUP)
 
     def _reader(pipe, cb):
       if pipe is None:
@@ -352,8 +371,12 @@ class Simulator:
         testEnv = os.environ.copy()
         testEnv["ESI_COSIM_PORT"] = str(simProc.port)
         testEnv["ESI_COSIM_HOST"] = "localhost"
-        return subprocess.run(inner_command, cwd=os.getcwd(),
-                              env=testEnv).returncode
+        ret = subprocess.run(inner_command, cwd=os.getcwd(),
+                             env=testEnv).returncode
+        if simProc.gui:
+          print("GUI mode - waiting for simulator to exit...")
+          simProc.proc.wait()
+        return ret
     finally:
-      if simProc:
+      if simProc and simProc.proc.poll() is None:
         simProc.force_stop()

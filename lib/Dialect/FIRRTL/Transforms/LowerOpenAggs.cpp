@@ -595,10 +595,9 @@ LogicalResult Visitor::visitDecl(InstanceOp op) {
   // Create new instance op with desired ports.
 
   // TODO: add and erase ports without intermediate + various array attributes.
-  auto tempOp = op.cloneAndInsertPorts(newPorts);
+  auto tempOp = op.cloneWithInsertedPorts(newPorts);
   opsToErase.push_back(tempOp);
-  ImplicitLocOpBuilder builder(op.getLoc(), op);
-  auto newInst = tempOp.erasePorts(builder, portsToErase);
+  auto newInst = tempOp.cloneWithErasedPorts(portsToErase);
 
   auto mappingResult = walkMappings(
       portMappings, /*includeErased=*/false,
@@ -835,7 +834,8 @@ struct LowerOpenAggsPass
 
 // This is the main entrypoint for the lowering pass.
 void LowerOpenAggsPass::runOnOperation() {
-  LLVM_DEBUG(debugPassHeader(this) << "\n");
+  CIRCT_DEBUG_SCOPED_PASS_LOGGER(this);
+
   SmallVector<Operation *, 0> ops(getOperation().getOps<FModuleLike>());
 
   LLVM_DEBUG(llvm::dbgs() << "Visiting modules:\n");
