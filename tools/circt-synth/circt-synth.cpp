@@ -169,6 +169,7 @@ static cl::opt<bool>
     disableDatapath("disable-datapath",
                     cl::desc("Disable datapath optimization passes"),
                     cl::init(false), cl::cat(mainCategory));
+// TODO - check what is going on here with the description?
 static cl::opt<bool>
     disableTimingAware("disable-timing-aware",
                        cl::desc("Disable datapath optimization passes"),
