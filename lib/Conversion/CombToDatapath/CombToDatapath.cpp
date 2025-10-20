@@ -90,6 +90,9 @@ struct DatapathLowerVariadic : OpConversionPattern<OpTy> {
   LogicalResult
   matchAndRewrite(OpTy op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
+    // Only match variadic ops
+    if (adaptor.getOperands().size() <= 2)
+      return failure();
     auto result = lowerFullyAssociativeOp(op, op.getOperands(), rewriter);
     rewriter.replaceOp(op, result);
     return success();
