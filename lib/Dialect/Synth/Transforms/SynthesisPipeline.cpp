@@ -111,11 +111,11 @@ void circt::synth::buildSynthOptimizationPipeline(
     pm.addPass(synth::createLowerWordToBits());
   pm.addPass(createCSEPass());
   // Run after LowerWordToBits for more precise timing-info & scalability.
-  pm.addPass(createLowerVariadicPass(options.timingAware));
+  pm.addPass(createLowerVariadicPass(false));
   pm.addPass(createStructuralHash());
   pm.addPass(createSimpleCanonicalizerPass());
-  pm.addPass(synth::createMaximumAndCover());
-  pm.addPass(createLowerVariadicPass(options.timingAware));
+  // pm.addPass(synth::createMaximumAndCover());
+  // pm.addPass(createLowerVariadicPass(false));
   pm.addPass(createStructuralHash());
 
   if (!options.abcCommands.empty()) {
