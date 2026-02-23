@@ -67,6 +67,68 @@ struct FoldAddReplicate : public OpRewritePattern<comb::AddOp> {
   }
 };
 
+// (a ? b + c : b)
+// -->
+// b + (a ? c : 0)
+struct MuxOverAdd : public OpRewritePattern<comb::MuxOp> {
+  using OpRewritePattern::OpRewritePattern;
+
+  // When used in conjunction with datapath canonicalization will only replicate
+  // two input adders.
+  LogicalResult matchAndRewrite(comb::MuxOp muxOp,
+                                PatternRewriter &rewriter) const override {
+
+    SmallVector<Value> trueValOperands = {muxOp.getTrueValue()};
+    SmallVector<Value> falseValOperands = {muxOp.getFalseValue()};
+    // match a ? b + c : xx
+    if (comb::AddOp trueVal = muxOp.getTrueValue().getDefiningOp<comb::AddOp>())
+      trueValOperands = trueVal.getOperands();
+
+    // match a ? xx : c + d
+    if (comb::AddOp falseVal =
+            muxOp.getFalseValue().getDefiningOp<comb::AddOp>())
+      falseValOperands = falseVal.getOperands();
+
+    SmallVector<Value, 8> newCompressOperands;
+    for (Value elem : trueValOperands) {
+      if (llvm::find(falseValOperands, elem) != falseValOperands.end())
+        newCompressOperands.push_back(elem);
+    }
+
+    // No common argumetns
+    if (newCompressOperands.size() == 0)
+      return failure();
+
+    // Remove intersection elements from true values and false values
+    llvm::erase_if(trueValOperands, [&newCompressOperands](Value elem) {
+      return llvm::find(newCompressOperands, elem) != newCompressOperands.end();
+    });
+
+    llvm::erase_if(falseValOperands, [&newCompressOperands](Value elem) {
+      return llvm::find(newCompressOperands, elem) != newCompressOperands.end();
+    });
+
+    // Pad with zeros to match number of operands
+    // a ? b + c : d -> (a ? b : d) + (a ? c : 0)
+    auto zero = hw::ConstantOp::create(
+        rewriter, muxOp.getLoc(), rewriter.getIntegerAttr(muxOp.getType(), 0));
+    auto maxOperands =
+        std::max(trueValOperands.size(), falseValOperands.size());
+    for (size_t i = 0; i < maxOperands; ++i) {
+      auto tOp = i < trueValOperands.size() ? trueValOperands[i] : zero;
+      auto fOp = i < falseValOperands.size() ? falseValOperands[i] : zero;
+
+      auto newMux = comb::MuxOp::create(rewriter, muxOp.getLoc(),
+                                        muxOp.getCond(), tOp, fOp);
+      newCompressOperands.push_back(newMux.getResult());
+    }
+
+    // Add the results of the CompressOp
+    rewriter.replaceOpWithNewOp<comb::AddOp>(muxOp, newCompressOperands, true);
+    return success();
+  }
+};
+
 // (a ? b + c : d + e) + f
 // -->
 // (a ? b : d) + (a ? c : e) + f
@@ -125,6 +187,58 @@ struct FoldMuxAdd : public OpRewritePattern<comb::AddOp> {
     }
 
     // Nothing to be folded
+    if (newCompressOperands.size() <= addOp.getNumOperands())
+      return failure();
+
+    // Create a new CompressOp with all collected operands
+    auto newCompressOp = datapath::CompressOp::create(rewriter, addOp.getLoc(),
+                                                      newCompressOperands, 2);
+
+    // Add the results of the CompressOp
+    rewriter.replaceOpWithNewOp<comb::AddOp>(addOp, newCompressOp.getResults(),
+                                             true);
+    return success();
+  }
+};
+
+// ((a + b) << c) + d
+// -->
+// (a << c) + (b << c) + d
+struct FoldShiftAdd : public OpRewritePattern<comb::AddOp> {
+  using OpRewritePattern::OpRewritePattern;
+
+  // When used in conjunction with datapath canonicalization will only replicate
+  // two input adders.
+  LogicalResult matchAndRewrite(comb::AddOp addOp,
+                                PatternRewriter &rewriter) const override {
+
+    SmallVector<Value, 8> newCompressOperands;
+    for (Value operand : addOp.getOperands()) {
+      // Detect a mux operand - then check if it contains add operations
+      comb::ShlOp nestedShiftOp = operand.getDefiningOp<comb::ShlOp>();
+
+      // If not matched just add the operand without modification
+      if (!nestedShiftOp) {
+        newCompressOperands.push_back(operand);
+        continue;
+      }
+
+      SmallVector<Value> shiftedVal = {};
+      // match (a+b) << c
+      comb::AddOp add = nestedShiftOp.getLhs().getDefiningOp<comb::AddOp>();
+
+      if (!add || add.getNumOperands() < 2) {
+        newCompressOperands.push_back(operand);
+        continue;
+      }
+
+      for (Value addend : add.getOperands()) {
+        auto newShift = comb::ShlOp::create(rewriter, addOp.getLoc(), addend,
+                                            nestedShiftOp.getRhs());
+        newCompressOperands.push_back(newShift.getResult());
+      }
+    }
+
     if (newCompressOperands.size() <= addOp.getNumOperands())
       return failure();
 
@@ -240,7 +354,8 @@ struct DatapathReduceDelayPass
     MLIRContext *ctx = op->getContext();
 
     RewritePatternSet patterns(ctx);
-    patterns.add<FoldAddReplicate, FoldMuxAdd, ConvertCmpToAdd>(ctx);
+    patterns.add<FoldAddReplicate, MuxOverAdd, FoldMuxAdd, ConvertCmpToAdd,
+                 FoldShiftAdd>(ctx);
 
     if (failed(applyPatternsGreedily(op, std::move(patterns))))
       signalPassFailure();
