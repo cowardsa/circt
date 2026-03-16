@@ -107,10 +107,10 @@ struct FoldCompressIntoCompress
 
       // If the operand has multiple uses, we do not fold it into a compress
       // operation, so we treat it as a regular operand to maintain sharing.
-      if (!operand.hasOneUse()) {
-        newCompressOperands.push_back(operand);
-        continue;
-      }
+      // if (!operand.hasOneUse()) {
+      //   newCompressOperands.push_back(operand);
+      //   continue;
+      // }
 
       // Found a compress op - add its operands to our new list
       if (auto compressOp = operand.getDefiningOp<datapath::CompressOp>()) {
@@ -432,10 +432,14 @@ struct ReduceNumPartialProducts : public OpRewritePattern<PartialProductOp> {
       return failure();
 
     // Need the +1 for the carry-out
-    size_t maxNonZeroBits = std::max(*op0NonZeroBits, *op1NonZeroBits);
+    size_t minNonZeroBits = std::min(*op0NonZeroBits, *op1NonZeroBits);
+
+    ValueRange newOperands = operands;
+    if (*op1NonZeroBits < *op0NonZeroBits)
+      newOperands = ValueRange{operands[1], operands[0]};
 
     auto newPP = datapath::PartialProductOp::create(
-        rewriter, op.getLoc(), op.getOperands(), maxNonZeroBits);
+        rewriter, op.getLoc(), newOperands, minNonZeroBits);
 
     auto zero = hw::ConstantOp::create(rewriter, op.getLoc(),
                                        APInt::getZero(inputWidth));
