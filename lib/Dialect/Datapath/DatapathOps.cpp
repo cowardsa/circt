@@ -13,6 +13,7 @@
 #include "circt/Dialect/Datapath/DatapathOps.h"
 #include "circt/Dialect/Comb/CombOps.h"
 #include "circt/Dialect/HW/HWOps.h"
+#include "mlir/IR/AsmState.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/Format.h"
 #include "llvm/Support/KnownBits.h"
@@ -69,29 +70,47 @@ static void printCompressFormat(OpAsmPrinter &printer, Operation *op,
 //===----------------------------------------------------------------------===//
 // Compressor Tree Logic.
 //===----------------------------------------------------------------------===//
-
+auto getUniqueId = [](Value val) {
+  std::string name = "v";
+  name += std::to_string(reinterpret_cast<uintptr_t>(val.getAsOpaquePointer()));
+  return name;
+};
 // Construct a full adder for three 1-bit inputs.
 std::pair<CompressorBit, CompressorBit>
 CompressorTree::fullAdderWithDelay(OpBuilder &builder, CompressorBit a,
                                    CompressorBit b, CompressorBit c) {
 
-  auto aXorB = builder.createOrFold<comb::XorOp>(loc, a.val, b.val, true);
-  Value sumVal = builder.createOrFold<comb::XorOp>(loc, aXorB, c.val, true);
+  // auto aXorB = builder.createOrFold<comb::XorOp>(loc, a.val, b.val, true);
+  // Value sumVal = builder.createOrFold<comb::XorOp>(loc, aXorB, c.val, true);
 
-  auto carryVal = builder.createOrFold<comb::OrOp>(
-      loc,
-      ArrayRef<Value>{
-          builder.createOrFold<comb::AndOp>(loc, a.val, b.val, true),
-          builder.createOrFold<comb::AndOp>(loc, aXorB, c.val, true)},
-      true);
+  // auto carryVal = builder.createOrFold<comb::OrOp>(
+  //     loc,
+  //     ArrayRef<Value>{
+  //         builder.createOrFold<comb::AndOp>(loc, a.val, b.val, true),
+  //         builder.createOrFold<comb::AndOp>(loc, aXorB, c.val, true)},
+  //     true);
+  auto ty = a.val.getType();
 
+  auto faOp = builder.create<datapath::FullAdderOp>(
+      loc, llvm::SmallVector<mlir::Type, 2>{ty, ty}, a.val, b.val, c.val);
+  //                                                   b.val, c.val);
   auto sumDelay = std::max(std::max(a.delay, b.delay) + 1, c.delay) + 1;
   auto carryDelay = sumDelay + 1;
 
-  CompressorBit sum = {sumVal, sumDelay};
-  CompressorBit carry = {carryVal, carryDelay};
+  CompressorBit sum = {faOp.getSum(), sumDelay};
+  CompressorBit carry = {faOp.getCarry(), carryDelay};
   std::pair<CompressorBit, CompressorBit> fa{sum, carry};
   ++numFullAdders;
+
+  proof += "\n";
+  // proof += getUniqueId(sum.val) + " = " + getUniqueId(a.val) + " + " +
+  //          getUniqueId(b.val) + " + " + getUniqueId(c.val) + " - 2*" +
+  //          getUniqueId(carry.val);
+
+  proof += "(declare-fun " + getUniqueId(carry.val) + " () Int)\n";
+  proof += "(define-fun " + getUniqueId(sum.val) + " () Int\n (+ " +
+           getUniqueId(a.val) + " " + getUniqueId(b.val) + " " +
+           getUniqueId(c.val) + " (* -2 " + getUniqueId(carry.val) + ")))\n";
   return fa;
 }
 
@@ -108,6 +127,11 @@ CompressorTree::halfAdderWithDelay(OpBuilder &builder, CompressorBit a,
   CompressorBit sum = {sumVal, sumDelay};
   CompressorBit carry = {carryVal, carryDelay};
   std::pair<CompressorBit, CompressorBit> ha{sum, carry};
+  proof += "\n";
+  proof += "(declare-fun " + getUniqueId(carry.val) + " () Int)\n";
+  proof += "(define-fun " + getUniqueId(sum.val) + " () Int\n (+ " +
+           getUniqueId(a.val) + " " + getUniqueId(b.val) + " (* -2 " +
+           getUniqueId(carry.val) + ")))\n";
   return ha;
 }
 
@@ -115,11 +139,13 @@ CompressorTree::halfAdderWithDelay(OpBuilder &builder, CompressorBit a,
 CompressorTree::CompressorTree(size_t width,
                                const SmallVector<SmallVector<Value>> &addends,
                                Location loc)
-    : columns(width), width(width), numStages(0), numFullAdders(0), loc(loc) {
+    : columns(width), width(width), numStages(0), numFullAdders(0), loc(loc),
+      proof("") {
   assert(addends.size() > 2);
 
   // Convert addends rows to columns
   // Known bits analysis constructs a minimal array - skipping zeros
+
   for (auto row : addends) {
     // Number of bits in a row == bitwidth of input addends
     // Compressors will be formed of uniform bitwidth addends
@@ -132,8 +158,31 @@ CompressorTree::CompressorTree(size_t width,
         continue;
       // Add non-zero bit to the column
       columns[i].push_back(bit);
+      proof += "\n(declare-fun " + getUniqueId(bit.val) + " () Int)";
     }
   }
+
+  proof += "\n(define-fun spec () Int \n(+ ";
+  for (size_t i = 0; i < width; ++i) {
+
+    auto weight = (1ULL << i);
+    if (i > 0)
+      proof += " (* " + std::to_string(weight) + " ";
+
+    if (columns[i].size() > 1)
+      proof += "(+ ";
+    for (size_t j = 0; j < columns[i].size(); ++j) {
+      if (j > 0)
+        proof += " ";
+      auto val = columns[i][j].val;
+      proof += getUniqueId(val);
+    }
+    if (columns[i].size() > 1)
+      proof += ")";
+    if (i > 0)
+      proof += ")";
+  }
+  proof += "))";
 }
 
 // Update the input delays based on longest path analysis
@@ -183,6 +232,7 @@ SmallVector<Value> CompressorTree::columnsToAddends(OpBuilder &builder,
       addends.push_back(hw::ConstantOp::create(builder, loc, APInt(width, 0)));
       continue;
     }
+
     // Otherwise populate a addend formed from a concatenation
     for (size_t j = 0; j < width; ++j) {
       if (i < columns[j].size())
@@ -195,6 +245,33 @@ SmallVector<Value> CompressorTree::columnsToAddends(OpBuilder &builder,
     addends.push_back(comb::ConcatOp::create(builder, loc, addend));
     addend.clear();
   }
+
+  proof += "\n(define-fun impl () Int \n(+ ";
+  for (size_t i = 0; i < width; ++i) {
+
+    auto weight = (1ULL << i);
+    if (i > 0)
+      proof += " (* " + std::to_string(weight) + " ";
+
+    if (columns[i].size() > 1)
+      proof += "(+ ";
+    for (size_t j = 0; j < columns[i].size(); ++j) {
+      if (j > 0)
+        proof += " ";
+      auto val = columns[i][j].val;
+      proof += getUniqueId(val);
+    }
+    if (columns[i].size() > 1)
+      proof += ")";
+    if (i > 0)
+      proof += ")";
+  }
+  proof += "))";
+
+  auto weight = (1ULL << width);
+  proof += "\n(assert (not (= (mod (- impl spec) " + std::to_string(weight) +
+           ") 0)))\n(check-sat)";
+
   return addends;
 }
 
@@ -213,8 +290,8 @@ SmallVector<Value> CompressorTree::compressToHeight(OpBuilder &builder,
 // Perform recursive compression using timing information until reduced to the
 // target height - this currently uses Dadda's algorithm and timing driven
 // signal selection
-// TODO: Dadda's algorithm is redundant here since it assumes uniform arrival so
-// need to implement a more timing driven approach
+// TODO: Dadda's algorithm is redundant here since it assumes uniform arrival
+// so need to implement a more timing driven approach
 SmallVector<Value> CompressorTree::compressUsingTiming(OpBuilder &builder,
                                                        size_t targetHeight) {
   while (getMaxHeight() > targetHeight) {
@@ -292,7 +369,9 @@ SmallVector<Value> CompressorTree::compressUsingTiming(OpBuilder &builder,
     columns = std::move(newColumns);
   }
   LLVM_DEBUG(dump(););
-  return columnsToAddends(builder, targetHeight);
+  auto addends = columnsToAddends(builder, targetHeight);
+  llvm::dbgs() << proof << "\n";
+  return addends;
 }
 
 void CompressorTree::dump() const {

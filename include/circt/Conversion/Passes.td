@@ -915,8 +915,12 @@ def ConvertDatapathToComb : Pass<"convert-datapath-to-comb"> {
   let options = [
     Option<"lowerCompressToAdd", "lower-compress-to-add", "bool", "false",
            "Lower compress operators to variadic add.">,
+    Option<"skipCompress", "skip-compress", "bool", "false",
+           "Do not lower compress operators.">,
     Option<"forceBooth", "lower-partial-product-to-booth", "bool", "false",
            "Force all partial products to be lowered to Booth arrays.">,
+    Option<"forceMuxArray", "lower-partial-product-to-mux-array", "bool", "false",
+           "Force all partial products to be lowered to Mux arrays.">,
     Option<"timingAware", "timing-aware", "bool", "false",
            "Use timing-aware compressor synthesis algorithm.">
   ];

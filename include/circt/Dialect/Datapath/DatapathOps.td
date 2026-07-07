@@ -136,4 +136,27 @@ def PosPartialProductOp : DatapathOp<"pos_partial_product",
   ];
 }
 
+def FullAdderOp : DatapathOp<"full_adder", 
+            [Pure, SameTypeOperands, SameOperandsAndResultType]> {
+  let summary = "A full adder taking 3 inputs and producing a carry and sum";
+  let description = [{
+    Todo
+  }];
+  let arguments = (ins HWIntegerType:$a0, HWIntegerType:$a1, HWIntegerType:$a2);
+  let results   = (outs HWIntegerType:$carry, HWIntegerType:$sum);
+
+  let assemblyFormat = [{
+    $a0  `,` $a1 `,` $a2 attr-dict `:` functional-type(operands, results)
+  }];
+  // let hasCanonicalizer = true;
+  
+  // let builders = [
+  //   OpBuilder<(ins "ValueRange":$lhs, "int32_t":$targetRows), [{
+  //     auto inputType = lhs.front().getType();
+  //     SmallVector<Type> resultTypes(targetRows, inputType);
+  //     return build($_builder, $_state, resultTypes, lhs);
+  //   }]>
+  // ];
+}
+
 #endif // CIRCT_DIALECT_DATAPATH_OPS_TD

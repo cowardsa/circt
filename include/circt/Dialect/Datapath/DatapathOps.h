@@ -10,6 +10,7 @@
 #define CIRCT_DIALECT_DATAPATH_DATAPATHOPS_H
 
 #include "mlir/IR/OpImplementation.h"
+#include "mlir/Interfaces/InferTypeOpInterface.h"
 
 #include "circt/Dialect/Datapath/DatapathDialect.h"
 #include "circt/Dialect/HW/HWTypes.h"
@@ -68,6 +69,9 @@ private:
 
   // Location of compressor to replace
   Location loc;
+
+  // A lowering proof
+  std::string proof;
 
   SmallVector<Value> columnsToAddends(OpBuilder &builder, size_t targetHeight);
 

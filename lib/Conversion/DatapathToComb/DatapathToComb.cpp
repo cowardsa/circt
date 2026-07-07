@@ -105,10 +105,13 @@ private:
 struct DatapathPartialProductOpConversion : OpRewritePattern<PartialProductOp> {
   using OpRewritePattern<PartialProductOp>::OpRewritePattern;
 
-  DatapathPartialProductOpConversion(MLIRContext *context, bool forceBooth)
-      : OpRewritePattern<PartialProductOp>(context), forceBooth(forceBooth){};
+  DatapathPartialProductOpConversion(MLIRContext *context, bool forceBooth,
+                                     bool forceMuxArray)
+      : OpRewritePattern<PartialProductOp>(context), forceBooth(forceBooth),
+        forceMuxArray(forceMuxArray){};
 
   const bool forceBooth;
+  const bool forceMuxArray;
 
   LogicalResult matchAndRewrite(PartialProductOp op,
                                 PatternRewriter &rewriter) const override {
@@ -122,6 +125,9 @@ struct DatapathPartialProductOpConversion : OpRewritePattern<PartialProductOp> {
       rewriter.replaceOpWithNewOp<hw::ConstantOp>(op, op.getType(0), 0);
       return success();
     }
+
+    if (forceMuxArray)
+      return lowerMuxArray(rewriter, a, b, op, width);
 
     // Square partial product array can be reduced to upper triangular array.
     // For example: AND array for a 4-bit squarer:
@@ -437,6 +443,35 @@ private:
     rewriter.replaceOp(op, partialProducts);
     return success();
   }
+  static LogicalResult lowerMuxArray(PatternRewriter &rewriter, Value a,
+                                     Value b, PartialProductOp op,
+                                     unsigned width) {
+
+    Location loc = op.getLoc();
+    Value zeroA = hw::ConstantOp::create(rewriter, loc, APInt(width, 0));
+
+    SmallVector<Value> partialProducts;
+    partialProducts.reserve(op.getNumResults());
+
+    for (unsigned i = 0; i < op.getNumResults(); ++i) {
+      Value bBit = comb::ExtractOp::create(rewriter, loc, b, i, 1);
+      Value row = comb::MuxOp::create(rewriter, loc, bBit, a, zeroA, false);
+
+      if (i == 0) {
+        partialProducts.push_back(row);
+        continue;
+      }
+
+      Value shiftBy = hw::ConstantOp::create(rewriter, loc, APInt(i, 0));
+      Value shifted =
+          comb::ConcatOp::create(rewriter, loc, ValueRange{row, shiftBy});
+      Value ppRow = comb::ExtractOp::create(rewriter, loc, shifted, 0, width);
+      partialProducts.push_back(ppRow);
+    }
+
+    rewriter.replaceOp(op, partialProducts);
+    return success();
+  }
 };
 
 struct DatapathPosPartialProductOpConversion
@@ -587,16 +622,19 @@ static LogicalResult applyPatternsGreedilyWithTimingInfo(
 void ConvertDatapathToCombPass::runOnOperation() {
   RewritePatternSet patterns(&getContext());
 
-  patterns.add<DatapathPartialProductOpConversion,
-               DatapathPosPartialProductOpConversion>(patterns.getContext(),
+  patterns.add<DatapathPartialProductOpConversion>(patterns.getContext(),
+                                                   forceBooth, forceMuxArray);
+  patterns.add<DatapathPosPartialProductOpConversion>(patterns.getContext(),
                                                       forceBooth);
   synth::IncrementalLongestPathAnalysis *analysis = nullptr;
-  if (timingAware)
-    analysis = &getAnalysis<synth::IncrementalLongestPathAnalysis>();
-  if (lowerCompressToAdd)
+
+  if (lowerCompressToAdd && !skipCompress)
     // Lower compressors to simple add operations for downstream optimisations
     patterns.add<DatapathCompressOpAddConversion>(patterns.getContext());
-  else
+
+  if (timingAware)
+    analysis = &getAnalysis<synth::IncrementalLongestPathAnalysis>();
+  if (!lowerCompressToAdd && !skipCompress)
     // Lower compressors to a complete gate-level implementation
     patterns.add<DatapathCompressOpConversion>(patterns.getContext(), analysis);
 
@@ -608,6 +646,12 @@ void ConvertDatapathToCombPass::runOnOperation() {
   // Walk the operation and check for any remaining Datapath dialect
   // operations.
   auto result = getOperation()->walk([&](Operation *op) {
+    if (llvm::isa<datapath::FullAdderOp>(op))
+      return WalkResult::advance();
+
+    if (llvm::isa<datapath::CompressOp>(op) && skipCompress)
+      return WalkResult::advance();
+
     if (llvm::isa_and_nonnull<datapath::DatapathDialect>(op->getDialect())) {
       op->emitError("Datapath operation not converted: ") << *op;
       return WalkResult::interrupt();

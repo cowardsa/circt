@@ -175,6 +175,66 @@ struct PosPartialProductOpConversion
   }
 };
 
+struct FullAdderOpConversion : OpConversionPattern<FullAdderOp> {
+  using OpConversionPattern<FullAdderOp>::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(FullAdderOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+
+    ValueRange operands = adaptor.getOperands();
+
+    // Define bv2int for each input
+    auto aInt = smt::BV2IntOp::create(rewriter, op.getLoc(), operands[0]);
+    auto bInt = smt::BV2IntOp::create(rewriter, op.getLoc(), operands[1]);
+    auto cInt = smt::BV2IntOp::create(rewriter, op.getLoc(), operands[2]);
+
+    // auto zeroBit = smt::BVConstantOp::create(rewriter, op.getLoc(), 0, 1);
+    // auto aExt =
+    //     smt::ConcatOp::create(rewriter, op.getLoc(), zeroBit, operands[0]);
+    // auto bExt =
+    //     smt::ConcatOp::create(rewriter, op.getLoc(), zeroBit, operands[1]);
+    // auto cExt =
+    //     smt::ConcatOp::create(rewriter, op.getLoc(), zeroBit, operands[2]);
+    // FA = {0,a} + {0,b} + {0,c} -- retain the carry out
+    // auto faSpecPre = smt::BVAddOp::create(rewriter, op.getLoc(), aExt, bExt);
+    // auto faSpec = smt::BVAddOp::create(rewriter, op.getLoc(), faSpecPre,
+    // cExt);
+
+    // Create free BitVector variables
+    Type oneBitTy = smt::BitVectorType::get(getContext(), 1);
+    auto sum = smt::DeclareFunOp::create(rewriter, op.getLoc(), oneBitTy);
+    auto carry = smt::DeclareFunOp::create(rewriter, op.getLoc(), oneBitTy);
+
+    // Convert the free variables to Ints
+    auto sumInt = smt::BV2IntOp::create(rewriter, op.getLoc(), sum);
+    auto carryInt = smt::BV2IntOp::create(rewriter, op.getLoc(), carry);
+
+    // Compute faSpec = Int(a) + Int(b) + Int(c) - 2*Int(carry)
+    auto constMinusTwo = smt::IntConstantOp::create(
+        rewriter, op.getLoc(),
+        rewriter.getIntegerAttr(rewriter.getI32Type(), -2));
+    auto minusTwoCarry =
+        smt::IntMulOp::create(rewriter, op.getLoc(), {carryInt, constMinusTwo});
+
+    auto faSpec = smt::IntAddOp::create(rewriter, op.getLoc(),
+                                        {aInt, bInt, cInt, minusTwoCarry});
+
+    // auto carryExt = smt::ConcatOp::create(rewriter, op.getLoc(),
+    //                                       carry.getResult(), zeroBit);
+    // auto faImpl = smt::BVAddOp::create(rewriter, op.getLoc(), sumExt,
+    // carryExt);
+
+    // Assert faSpec == Int(sum)
+    auto premise = smt::EqOp::create(rewriter, op.getLoc(), faSpec, sumInt);
+    // Encode via an assertion (could be relaxed to an assumption).
+    smt::AssertOp::create(rewriter, op.getLoc(), premise);
+
+    rewriter.replaceOp(op, {carry.getResult(), sum.getResult()});
+    return success();
+  }
+};
+
 } // namespace
 
 //===----------------------------------------------------------------------===//
@@ -191,7 +251,8 @@ struct ConvertDatapathToSMTPass
 void circt::populateDatapathToSMTConversionPatterns(
     TypeConverter &converter, RewritePatternSet &patterns) {
   patterns.add<CompressOpConversion, PartialProductOpConversion,
-               PosPartialProductOpConversion>(converter, patterns.getContext());
+               PosPartialProductOpConversion, FullAdderOpConversion>(
+      converter, patterns.getContext());
 }
 
 void ConvertDatapathToSMTPass::runOnOperation() {
