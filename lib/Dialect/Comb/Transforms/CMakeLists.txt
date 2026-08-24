@@ -5,6 +5,7 @@ add_circt_dialect_library(CIRCTCombTransforms
   BalanceMux.cpp
   AssumeTwoValued.cpp
   SimplifyTruthTable.cpp
+  VerifiedDatapath.cpp
 
   DEPENDS
   CIRCTCombTransformsIncGen
