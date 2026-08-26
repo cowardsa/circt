@@ -52,7 +52,17 @@ createLowerVariadicPass(bool timingAware, bool reuseSubsets = false) {
 void circt::synth::buildCombLoweringPipeline(
     OpPassManager &pm, const CombLoweringPipelineOptions &options) {
   {
-    if (!options.disableDatapath) {
+    // The verified lowering replaces the Datapath dialect flow, so it takes
+    // priority over it when requested.
+    if (options.verifiedDatapath) {
+      // Lower variadic Mul into a binary op since the verified lowering only
+      // handles two-input multiplies.
+      pm.addPass(createLowerVariadicPass<comb::MulOp>(options.timingAware));
+      comb::VerifiedDatapathOptions verifiedOptions;
+      verifiedOptions.leanExe = options.verifiedDatapathLeanExe;
+      pm.addPass(comb::createVerifiedDatapath(verifiedOptions));
+      pm.addPass(createSimpleCanonicalizerPass());
+    } else if (!options.disableDatapath) {
       // Lower variadic Mul into a binary op to enable datapath lowering.
       pm.addPass(createLowerVariadicPass<comb::MulOp>(options.timingAware));
       pm.addPass(createConvertCombToDatapath());
