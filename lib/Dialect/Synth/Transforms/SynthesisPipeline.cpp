@@ -26,6 +26,12 @@
 #include "mlir/Pass/PassManager.h"
 #include "mlir/Transforms/Passes.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/Support/FileSystem.h"
+#include "llvm/Support/Path.h"
+#include "llvm/Support/ToolOutputFile.h"
+#include "llvm/Support/raw_ostream.h"
+#include <atomic>
+#include <memory>
 
 using namespace mlir;
 using namespace circt;
@@ -49,6 +55,60 @@ createLowerVariadicPass(bool timingAware, bool reuseSubsets = false) {
   options.reuseSubsets = reuseSubsets;
   return createLowerVariadic(options);
 }
+namespace {
+/// Writes the whole module to a file and changes nothing.
+///
+/// Scheduled directly after the verified lowering so the file captures the
+/// exact circuit the Lean proof covers. Everything downstream of this point
+/// (CSE, canonicalisation, comb->AIG, mapping) is unverified, so this snapshot
+/// is the reference an equivalence check compares the final output against.
+/// Taking it inside the pipeline -- rather than replaying the early passes in
+/// a separate process -- means the two sides provably come from one run.
+struct SnapshotIRPass
+    : public mlir::PassWrapper<SnapshotIRPass,
+                               mlir::OperationPass<hw::HWModuleOp>> {
+  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(SnapshotIRPass)
+
+  SnapshotIRPass(StringRef filename)
+      : filename(filename.str()),
+        writtenOnce(std::make_shared<std::atomic_flag>()) {}
+
+  StringRef getArgument() const override { return "synth-snapshot-ir"; }
+
+  void runOnOperation() override {
+    // The comb lowering pipeline runs nested under each hw.module, so write
+    // one file per module. With a single top -- the usual case -- this is just
+    // the requested path; otherwise the module name disambiguates.
+    auto module = getOperation();
+    SmallString<128> path(filename);
+    if (!writtenOnce->test_and_set()) {
+      // First module keeps the exact requested filename.
+    } else {
+      llvm::sys::path::replace_extension(
+          path, "." + module.getModuleName().str() + ".mlir");
+    }
+
+    std::error_code ec;
+    llvm::ToolOutputFile out(path, ec, llvm::sys::fs::OF_Text);
+    if (ec) {
+      module.emitError() << "cannot open snapshot file '" << path
+                         << "': " << ec.message();
+      return signalPassFailure();
+    }
+    // Print the module inside a top-level container so the result parses
+    // standalone, which is what an equivalence checker needs.
+    out.os() << "module {\n";
+    module.print(out.os());
+    out.os() << "\n}\n";
+    out.keep();
+  }
+
+  std::string filename;
+  // Shared so pass clones agree on which module claimed the exact filename.
+  std::shared_ptr<std::atomic_flag> writtenOnce;
+};
+} // namespace
+
 void circt::synth::buildCombLoweringPipeline(
     OpPassManager &pm, const CombLoweringPipelineOptions &options) {
   {
@@ -61,6 +121,10 @@ void circt::synth::buildCombLoweringPipeline(
       comb::VerifiedDatapathOptions verifiedOptions;
       verifiedOptions.leanExe = options.verifiedDatapathLeanExe;
       pm.addPass(comb::createVerifiedDatapath(verifiedOptions));
+      // Capture the proof boundary before any unverified pass runs.
+      if (!options.verifiedDatapathSnapshot.empty())
+        pm.addPass(
+            std::make_unique<SnapshotIRPass>(options.verifiedDatapathSnapshot));
       pm.addPass(createSimpleCanonicalizerPass());
     } else if (!options.disableDatapath) {
       // Lower variadic Mul into a binary op to enable datapath lowering.

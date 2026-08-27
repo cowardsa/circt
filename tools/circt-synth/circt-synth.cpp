@@ -205,6 +205,13 @@ static cl::opt<std::string> verifiedDatapathLeanExe(
     cl::desc("Path to the datapath-cli executable used by --verified-datapath"),
     cl::init(""), cl::cat(mainCategory));
 
+static cl::opt<std::string> verifiedDatapathSnapshot(
+    "verified-datapath-snapshot",
+    cl::desc("Write the IR to this file immediately after the verified "
+             "lowering, before any unverified pass runs. Use it as the "
+             "reference when equivalence-checking the rest of the pipeline"),
+    cl::init(""), cl::cat(mainCategory));
+
 static cl::opt<bool> enableSOPBalancing("enable-sop-balancing",
                                         cl::desc("Enable SOP balancing"),
                                         cl::init(false), cl::cat(mainCategory));
@@ -284,6 +291,7 @@ static void populateCIRCTSynthPipeline(PassManager &pm) {
     loweringOptions.disableDatapath = disableDatapath;
     loweringOptions.verifiedDatapath = verifiedDatapath;
     loweringOptions.verifiedDatapathLeanExe = verifiedDatapathLeanExe;
+    loweringOptions.verifiedDatapathSnapshot = verifiedDatapathSnapshot;
     loweringOptions.timingAware = !disableTimingAware;
     loweringOptions.synthesisStrategy = synthesisStrategy;
     circt::synth::buildCombLoweringPipeline(pm, loweringOptions);

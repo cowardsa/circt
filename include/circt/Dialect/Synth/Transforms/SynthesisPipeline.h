@@ -43,6 +43,13 @@ struct CombLoweringPipelineOptions
       llvm::cl::desc("Path to the datapath-cli executable used by "
                      "verified-datapath"),
       llvm::cl::init("")};
+  PassOptions::Option<std::string> verifiedDatapathSnapshot{
+      *this, "verified-datapath-snapshot",
+      llvm::cl::desc("Write the IR to this file immediately after the verified "
+                     "lowering runs, before any unverified pass touches it. "
+                     "This is the boundary the Lean proof covers, so it is the "
+                     "reference for checking the rest of the pipeline"),
+      llvm::cl::init("")};
   PassOptions::Option<bool> timingAware{
       *this, "timing-aware",
       llvm::cl::desc("Lower operators in a timing-aware fashion"),
