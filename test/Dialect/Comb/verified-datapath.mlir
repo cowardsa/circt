@@ -48,8 +48,9 @@ hw.module @variadic_mul(in %a : i3, in %b : i3, in %c : i3, out out : i3) {
 }
 
 // A 3-operand addition compresses each column of stacked operand bits (bit k
-// of operands a/b/c) down to two rows: one FA in columns 1 and 2, one HA in
-// column 0 (its sum is g0; the b0 bit rides along in row1).
+// of operands a/b/c) down to two rows: one FA in columns 1 and 2 (carry as
+// `ab | (a^b)c`), one HA in column 0 (its sum is g0; the b0 bit rides along in
+// row1).
 // CHECK-LABEL: hw.module @add3x3
 hw.module @add3x3(in %a : i3, in %b : i3, in %c : i3, out out : i3) {
   // CHECK:      %[[B0:.+]] = comb.extract %b from 0 : (i3) -> i1
@@ -67,13 +68,11 @@ hw.module @add3x3(in %a : i3, in %b : i3, in %c : i3, out out : i3) {
   // CHECK-NEXT: %[[C2:.+]] = comb.extract %c from 2 : (i3) -> i1
   // CHECK-NEXT: %[[G5:.+]] = comb.xor bin %[[G4]], %[[C2]] : i1
   // CHECK-NEXT: %[[G6:.+]] = comb.and bin %[[A1]], %[[B1]] : i1
-  // CHECK-NEXT: %[[G7:.+]] = comb.and bin %[[A1]], %[[C1]] : i1
+  // CHECK-NEXT: %[[G7:.+]] = comb.and bin %[[G1]], %[[C1]] : i1
   // CHECK-NEXT: %[[G8:.+]] = comb.or bin %[[G6]], %[[G7]] : i1
-  // CHECK-NEXT: %[[G9:.+]] = comb.and bin %[[B1]], %[[C1]] : i1
-  // CHECK-NEXT: %[[G10:.+]] = comb.or bin %[[G8]], %[[G9]] : i1
   // CHECK-NEXT: %[[ROW0:.+]] = comb.concat %[[G5]], %[[G2]], %[[G0]] : i1, i1, i1
   // CHECK-NEXT: %[[A0:.+]] = comb.extract %a from 0 : (i3) -> i1
-  // CHECK-NEXT: %[[ROW1:.+]] = comb.concat %[[G10]], %[[G3]], %[[A0]] : i1, i1, i1
+  // CHECK-NEXT: %[[ROW1:.+]] = comb.concat %[[G8]], %[[G3]], %[[A0]] : i1, i1, i1
   // CHECK-NEXT: %[[SUM:.+]] = comb.add bin %[[ROW0]], %[[ROW1]] : i3
   // CHECK-NEXT: hw.output %[[SUM]] : i3
   %0 = comb.add %a, %b, %c : i3
@@ -111,6 +110,74 @@ hw.module @mul_zext_full(in %a : i5, in %b : i5, out out : i10) {
   %c0_i5 = hw.constant 0 : i5
   %ax = comb.concat %c0_i5, %a : i5, i5
   %bx = comb.concat %c0_i5, %b : i5, i5
+  %0 = comb.mul %ax, %bx : i10
+  hw.output %0 : i10
+}
+
+// Sign-extension awareness: comb spells a sign extension as
+// `concat(replicate(extract(x, n-1)), x)`, which carries no known bits, so
+// the structural `m_Sext` match is what reports the live width (5) here. The
+// tool is invoked as `mul 10 5s 5s`, and the heap holds the 5x5 real partial
+// products plus the sign-bit copies the extension implies — 149 gates against
+// the 189 of a blind 10-bit multiply, with bits 5-9 of the extended operands
+// never extracted.
+// CHECK-LABEL: hw.module @mul_sext_full
+hw.module @mul_sext_full(in %a : i5, in %b : i5, out out : i10) {
+  // CHECK-NOT: comb.extract %{{.+}} from 5 : (i10) -> i1
+  // CHECK-NOT: comb.extract %{{.+}} from 6 : (i10) -> i1
+  // CHECK-NOT: comb.extract %{{.+}} from 7 : (i10) -> i1
+  // CHECK-NOT: comb.extract %{{.+}} from 8 : (i10) -> i1
+  // CHECK-NOT: comb.extract %{{.+}} from 9 : (i10) -> i1
+  // CHECK: %[[SUM:.+]] = comb.add bin %{{.+}}, %{{.+}} : i10
+  // CHECK-NEXT: hw.output %[[SUM]] : i10
+  %sa = comb.extract %a from 4 : (i5) -> i1
+  %ea = comb.replicate %sa : (i1) -> i5
+  %ax = comb.concat %ea, %a : i5, i5
+  %sb = comb.extract %b from 4 : (i5) -> i1
+  %eb = comb.replicate %sb : (i1) -> i5
+  %bx = comb.concat %eb, %b : i5, i5
+  %0 = comb.mul %ax, %bx : i10
+  hw.output %0 : i10
+}
+
+// A single sign bit is added without a `comb.replicate`; `m_Sext` matches that
+// shape too, so the third operand is compressed as `3s` (`add 4 3 4 4 3s`).
+// CHECK-LABEL: hw.module @add_sext
+hw.module @add_sext(in %a : i4, in %b : i4, in %c : i3, out out : i4) {
+  // The extended operand's bit 3 is never extracted; its sign bit (bit 2) is
+  // extracted once and feeds both of the columns above the live width.
+  // CHECK:      %[[CX:.+]] = comb.concat %{{.+}}, %c : i1, i3
+  // CHECK-NOT:  comb.extract %[[CX]] from 3
+  // CHECK:      %[[SIGN:.+]] = comb.extract %[[CX]] from 2 : (i4) -> i1
+  // CHECK-NOT:  comb.extract %[[CX]] from 3
+  // CHECK:      %[[SUM:.+]] = comb.add bin %{{.+}}, %{{.+}} : i4
+  // CHECK-NEXT: hw.output %[[SUM]] : i4
+  %sc = comb.extract %c from 2 : (i3) -> i1
+  %cx = comb.concat %sc, %c : i1, i3
+  %0 = comb.add %a, %b, %cx : i4
+  hw.output %0 : i4
+}
+
+// When both models apply, zero extension is the tighter one: the sign bit of
+// the extended value is itself known zero here, so known-bits reports a live
+// width of 5 and the operand is compressed as `5`, not as the `9s` the
+// structural match would give (`mul 10 5 5`, 73 gates).
+// CHECK-LABEL: hw.module @sext_of_zext_prefers_zext
+hw.module @sext_of_zext_prefers_zext(in %a : i5, in %b : i5, out out : i10) {
+  // CHECK-NOT: comb.extract %{{.+}} from 5 : (i10) -> i1
+  // CHECK-NOT: comb.extract %{{.+}} from 6 : (i10) -> i1
+  // CHECK-NOT: comb.extract %{{.+}} from 7 : (i10) -> i1
+  // CHECK-NOT: comb.extract %{{.+}} from 8 : (i10) -> i1
+  // CHECK-NOT: comb.extract %{{.+}} from 9 : (i10) -> i1
+  // CHECK: %[[SUM:.+]] = comb.add bin %{{.+}}, %{{.+}} : i10
+  // CHECK-NEXT: hw.output %[[SUM]] : i10
+  %c0_i4 = hw.constant 0 : i4
+  %av = comb.concat %c0_i4, %a : i4, i5
+  %sa = comb.extract %av from 8 : (i9) -> i1
+  %ax = comb.concat %sa, %av : i1, i9
+  %bv = comb.concat %c0_i4, %b : i4, i5
+  %sb = comb.extract %bv from 8 : (i9) -> i1
+  %bx = comb.concat %sb, %bv : i1, i9
   %0 = comb.mul %ax, %bx : i10
   hw.output %0 : i10
 }

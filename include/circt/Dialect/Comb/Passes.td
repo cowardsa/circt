@@ -78,6 +78,12 @@ def VerifiedDatapath : Pass<"comb-verified-datapath"> {
     ops over individual bits, packs the two remaining rows into two values,
     and replaces the original operation with a single 2-input `comb.add` (the
     final carry-propagate adder), which is left for downstream lowering.
+
+    Extended operands are recognized and modelled as such, so that their
+    extension bits never enter the bit heap as independent bits: known-bits
+    analysis reports the live width of a zero-extended operand, and a
+    sign-extended one (`concat(replicate(x[n-1]), x)`) is matched
+    structurally, with its sign bit shared across every column above `n`.
   }];
   let options = [Option<"leanExe", "lean-exe", "std::string", "\"\"",
       "Path to the datapath-cli executable implementing the verified "

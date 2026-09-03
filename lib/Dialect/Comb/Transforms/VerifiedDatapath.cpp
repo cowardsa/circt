@@ -11,14 +11,17 @@
 // formally verified compressor trees.
 //
 // The pass invokes the Lean `datapath-cli` tool (from the
-// datapath-verification project) as `datapath-cli mul <width>` or
-// `datapath-cli add <width> <numOperands>`. The tool builds the bit heap
-// (partial products for mul, stacked operand bits for add), compresses it
-// with a Dadda tree, and replays the resulting full/half adder chain through
-// the formally verified `applyChainSafe` checker before printing a gate
-// netlist:
+// datapath-verification project) as `datapath-cli mul <width> <specs...>` or
+// `datapath-cli add <width> <numOperands> <specs...>`. An operand spec is
+// `<live>` or `<live>s`: the operand's low `<live>` bits are its real bits
+// and the bits above them are either constant 0 (`<live>`, zero extension)
+// or copies of bit `<live>-1` (`<live>s`, sign extension). The tool builds
+// the bit heap (partial products for mul, stacked operand bits for add) from
+// that operand model, compresses it with a Dadda tree, and replays the
+// resulting full/half adder chain through the formally verified
+// `applyChainSafe` checker before printing a gate netlist:
 //
-//   ok mul <width>          (or: ok add <width> <numOperands>)
+//   ok mul <width> <specs...>   (or: ok add <width> <numOperands> <specs...>)
 //   gate g0 and b0 b4
 //   gate g1 xor g0 b2
 //   ...
@@ -39,11 +42,12 @@
 #include "circt/Dialect/Comb/CombPasses.h"
 #include "circt/Dialect/HW/HWOps.h"
 #include "mlir/IR/Builders.h"
+#include "mlir/IR/Matchers.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/StringMap.h"
-#include "llvm/Support/KnownBits.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/FileUtilities.h"
+#include "llvm/Support/KnownBits.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/Program.h"
 
@@ -58,6 +62,52 @@ namespace comb {
 } // namespace circt
 
 namespace {
+
+//===----------------------------------------------------------------------===//
+// Operand extension analysis
+//===----------------------------------------------------------------------===//
+
+/// How an operand's `live` low bits extend to the full result width: the bits
+/// at or above `live` are all constant 0 (zero extension) or all copies of bit
+/// `live - 1` (sign extension). The Lean flow models the operand accordingly
+/// and never puts the extension bits in the heap as independent bits.
+struct OperandSpec {
+  unsigned live;
+  bool isSigned;
+
+  /// The protocol token for this operand: `<live>` or `<live>s`.
+  std::string token() const {
+    return std::to_string(live) + (isSigned ? "s" : "");
+  }
+};
+
+/// Determine the extension shape of `operand`, an operand of a `width`-bit op.
+///
+/// Zero extension shows up in the known-bits lattice as leading known-zero
+/// bits. Sign extension has no known bits at all, but comb spells it
+/// structurally as
+///
+///   %sign = comb.extract %x from <n-1> : (i<n>) -> i1
+///   %ext  = comb.replicate %sign : (i1) -> i<width-n>
+///   %res  = comb.concat %ext, %x : i<width-n>, i<n>
+///
+/// (with the `comb.replicate` absent when only a single bit is added), which
+/// `comb::m_Sext` matches.
+static OperandSpec computeOperandSpec(Value operand, unsigned width) {
+  KnownBits known = comb::computeKnownBits(operand);
+  OperandSpec spec{width - known.Zero.countLeadingOnes(), /*isSigned=*/false};
+
+  Value base;
+  if (mlir::matchPattern(operand, comb::m_Sext(mlir::matchers::m_Any(&base)))) {
+    unsigned signedLive = base.getType().getIntOrFloatBitWidth();
+    // A zero-extended operand contributes nothing above its live width, while
+    // a sign-extended one still replicates its sign bit into every column, so
+    // zero extension wins whenever it is at least as tight.
+    if (signedLive > 0 && signedLive < spec.live)
+      spec = {signedLive, /*isSigned=*/true};
+  }
+  return spec;
+}
 
 //===----------------------------------------------------------------------===//
 // Netlist representation and parsing
@@ -85,7 +135,7 @@ struct Netlist {
 };
 
 static FailureOr<NetlistRef> parseRef(StringRef token, unsigned width,
-                                      ArrayRef<unsigned> liveWidths,
+                                      ArrayRef<OperandSpec> specs,
                                       unsigned numGatesSoFar) {
   if (token == "-")
     return NetlistRef{NetlistRef::Kind::Zero, 0};
@@ -96,10 +146,10 @@ static FailureOr<NetlistRef> parseRef(StringRef token, unsigned width,
   unsigned index;
   if (token.consume_front("b")) {
     // Input bits must address a live bit of an existing operand: bits at or
-    // above an operand's live width are known zero and a valid netlist never
-    // references them.
-    if (token.getAsInteger(10, index) || index / width >= liveWidths.size() ||
-        index % width >= liveWidths[index / width])
+    // above an operand's live width are a constant 0 or a copy of the sign
+    // bit, and a valid netlist references neither directly.
+    if (token.getAsInteger(10, index) || index / width >= specs.size() ||
+        index % width >= specs[index / width].live)
       return failure();
     return NetlistRef{NetlistRef::Kind::InputBit, index};
   }
@@ -113,14 +163,14 @@ static FailureOr<NetlistRef> parseRef(StringRef token, unsigned width,
 }
 
 /// Parse the netlist protocol output; `header` is the expected first line
-/// (e.g. "ok mul 8 8 8" or "ok add 8 3 8 4 2"). `liveWidths` gives each
-/// operand's live width (bits above it are known zero).
+/// (e.g. "ok mul 8 8 8" or "ok add 8 3 8 4s 2"). `specs` gives each operand's
+/// live width and extension kind.
 static FailureOr<Netlist> parseNetlist(StringRef output, StringRef header,
                                        unsigned width,
-                                       ArrayRef<unsigned> liveWidths) {
+                                       ArrayRef<OperandSpec> specs) {
   Netlist netlist;
   netlist.width = width;
-  netlist.numOperands = liveWidths.size();
+  netlist.numOperands = specs.size();
 
   SmallVector<StringRef> lines;
   output.split(lines, '\n', /*MaxSplit=*/-1, /*KeepEmpty=*/false);
@@ -151,10 +201,9 @@ static FailureOr<Netlist> parseNetlist(StringRef output, StringRef header,
         gate.kind = NetlistGate::Kind::Nand;
       else
         return failure();
-      auto lhs = parseRef(tokens[3], width, liveWidths, netlist.gates.size());
-      auto rhs = parseRef(tokens[4], width, liveWidths, netlist.gates.size());
-      if (failed(lhs) || failed(rhs) ||
-          lhs->kind == NetlistRef::Kind::Zero ||
+      auto lhs = parseRef(tokens[3], width, specs, netlist.gates.size());
+      auto rhs = parseRef(tokens[4], width, specs, netlist.gates.size());
+      if (failed(lhs) || failed(rhs) || lhs->kind == NetlistRef::Kind::Zero ||
           rhs->kind == NetlistRef::Kind::Zero)
         return failure();
       gate.lhs = *lhs;
@@ -173,7 +222,7 @@ static FailureOr<Netlist> parseNetlist(StringRef output, StringRef header,
         return failure();
       seen = true;
       for (StringRef token : ArrayRef(tokens).drop_front()) {
-        auto ref = parseRef(token, width, liveWidths, netlist.gates.size());
+        auto ref = parseRef(token, width, specs, netlist.gates.size());
         if (failed(ref))
           return failure();
         row.push_back(*ref);
@@ -193,12 +242,12 @@ static FailureOr<Netlist> parseNetlist(StringRef output, StringRef header,
 // External tool invocation
 //===----------------------------------------------------------------------===//
 
-/// Run `<leanExe> mul <width> <liveA> <liveB>` or
-/// `<leanExe> add <width> <numOperands> <live0> ...` and parse its stdout.
+/// Run `<leanExe> mul <width> <specA> <specB>` or
+/// `<leanExe> add <width> <numOperands> <spec0> ...` and parse its stdout.
 /// Emits diagnostics on `op` when anything goes wrong.
 static FailureOr<Netlist> runNetlistTool(StringRef leanExe, StringRef kind,
                                          unsigned width,
-                                         ArrayRef<unsigned> liveWidths,
+                                         ArrayRef<OperandSpec> specs,
                                          Operation *op) {
   SmallString<128> outPath;
   if (llvm::sys::fs::createTemporaryFile("datapath-netlist", "txt", outPath))
@@ -210,9 +259,9 @@ static FailureOr<Netlist> runNetlistTool(StringRef leanExe, StringRef kind,
   // its header line.
   SmallVector<std::string> argStorage = {std::to_string(width)};
   if (kind == "add")
-    argStorage.push_back(std::to_string(liveWidths.size()));
-  for (unsigned live : liveWidths)
-    argStorage.push_back(std::to_string(live));
+    argStorage.push_back(std::to_string(specs.size()));
+  for (const OperandSpec &spec : specs)
+    argStorage.push_back(spec.token());
 
   SmallVector<StringRef> args = {leanExe, kind};
   std::string header = ("ok " + kind).str();
@@ -225,22 +274,22 @@ static FailureOr<Netlist> runNetlistTool(StringRef leanExe, StringRef kind,
                                            /*stdout=*/outPath.str(),
                                            /*stderr=*/std::nullopt};
   std::string errMsg;
-  int result =
-      llvm::sys::ExecuteAndWait(leanExe, args,
-                                /*Env=*/std::nullopt, redirects,
-                                /*SecondsToWait=*/0, /*MemoryLimit=*/0, &errMsg);
+  int result = llvm::sys::ExecuteAndWait(leanExe, args,
+                                         /*Env=*/std::nullopt, redirects,
+                                         /*SecondsToWait=*/0, /*MemoryLimit=*/0,
+                                         &errMsg);
   if (result != 0)
     return op->emitError("verified datapath tool '")
-               << leanExe << " " << llvm::join(args.begin() + 1, args.end(), " ")
-               << "' failed" << (errMsg.empty() ? "" : ": ") << errMsg,
+               << leanExe << " "
+               << llvm::join(args.begin() + 1, args.end(), " ") << "' failed"
+               << (errMsg.empty() ? "" : ": ") << errMsg,
            failure();
 
   auto buffer = llvm::MemoryBuffer::getFile(outPath);
   if (!buffer)
     return op->emitError("failed to read netlist output file"), failure();
 
-  auto netlist =
-      parseNetlist(buffer.get()->getBuffer(), header, width, liveWidths);
+  auto netlist = parseNetlist(buffer.get()->getBuffer(), header, width, specs);
   if (failed(netlist))
     return op->emitError("malformed netlist from verified datapath tool for '")
                << kind << " " << width << "'",
@@ -253,9 +302,8 @@ static FailureOr<Netlist> runNetlistTool(StringRef leanExe, StringRef kind,
 //===----------------------------------------------------------------------===//
 
 /// Materialize the netlist as comb ops and return the two packed rows.
-static std::pair<Value, Value> buildNetlist(const Netlist &netlist,
-                                            Operation *op,
-                                            ValueRange operands) {
+static std::pair<Value, Value>
+buildNetlist(const Netlist &netlist, Operation *op, ValueRange operands) {
   OpBuilder builder(op);
   Location loc = op->getLoc();
   unsigned width = netlist.width;
@@ -264,8 +312,7 @@ static std::pair<Value, Value> buildNetlist(const Netlist &netlist,
   Value constants[2];
   auto getConstant = [&](bool value) -> Value {
     if (!constants[value])
-      constants[value] =
-          hw::ConstantOp::create(builder, loc, APInt(1, value));
+      constants[value] = hw::ConstantOp::create(builder, loc, APInt(1, value));
     return constants[value];
   };
   SmallVector<Value> inputBits(netlist.numOperands * width);
@@ -375,21 +422,21 @@ void VerifiedDatapathPass::runOnOperation() {
     StringRef kind = isMul ? "mul" : "add";
     unsigned width = op->getResult(0).getType().getIntOrFloatBitWidth();
 
-    // An operand's live width excludes its leading known-zero bits — e.g. a
-    // zero-extended value `concat(c0, x)`. The Lean flow then keeps those
-    // constant-0 bits out of the bit heap entirely, shrinking the compressor.
-    SmallVector<unsigned> liveWidths;
-    for (Value operand : op->getOperands()) {
-      KnownBits known = comb::computeKnownBits(operand);
-      liveWidths.push_back(width - known.Zero.countLeadingOnes());
-    }
+    // An operand's live width excludes its extension bits — the leading
+    // known-zero bits of a zero-extended value `concat(c0, x)`, or the
+    // replicated sign bit of a sign-extended one `concat(replicate(x[n-1]),
+    // x)`. The Lean flow then keeps those bits out of the bit heap as
+    // independent bits entirely, shrinking the compressor.
+    SmallVector<OperandSpec> specs;
+    for (Value operand : op->getOperands())
+      specs.push_back(computeOperandSpec(operand, width));
 
     std::string key = (kind + Twine(" ") + Twine(width)).str();
-    for (unsigned live : liveWidths)
-      key += " " + std::to_string(live);
+    for (const OperandSpec &spec : specs)
+      key += " " + spec.token();
     auto cached = netlistCache.find(key);
     if (cached == netlistCache.end()) {
-      auto netlist = runNetlistTool(leanExe, kind, width, liveWidths, op);
+      auto netlist = runNetlistTool(leanExe, kind, width, specs, op);
       if (failed(netlist))
         return signalPassFailure();
       cached = netlistCache.try_emplace(key, std::move(*netlist)).first;
