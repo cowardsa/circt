@@ -91,11 +91,9 @@ def VerifiedDatapath : Pass<"comb-verified-datapath"> {
     the expression with a single 2-input `comb.add` (the final carry-propagate
     adder), which is left for downstream lowering.
 
-    Extended leaves are recognized and modelled as such, so that their
+    Zero-extended leaves are recognized and modelled as such, so that their
     extension bits never enter the bit heap as independent bits: known-bits
-    analysis reports the live width of a zero-extended operand, and a
-    sign-extended one (`concat(replicate(x[n-1]), x)`) is matched
-    structurally, with its sign bit shared across every column above `n`.
+    analysis reports each leaf's live width.
   }];
   let options = [
     Option<"leanExe", "lean-exe", "std::string", "\"\"",

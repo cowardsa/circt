@@ -26,11 +26,9 @@
 //   `add<n>`          an n-ary addition, followed by its n operands
 //   `<index>.<spec>`  a leaf: operand `<index>` with the given spec
 //
-// An operand spec is `<live>` or `<live>s`: the operand's low `<live>` bits
-// are its real bits and the bits above them are either constant 0 (`<live>`,
-// zero extension) or copies of bit `<live>-1` (`<live>s`, sign extension).
-// So `a * b + c` over three 8-bit-live operands in 16 bits is
-// `expr 16 3 add2 mul 0.8 1.8 2.8`.
+// An operand spec is `<live>`: the operand's low `<live>` bits are its real
+// bits and the bits above them are constant 0. So `a * b + c` over three
+// 8-bit-live operands in 16 bits is `expr 16 3 add2 mul 0.8 1.8 2.8`.
 //
 // The tool builds one bit heap for the whole expression (partial products for
 // each multiply, stacked operand bits for each addend), compresses it with a
@@ -58,7 +56,6 @@
 #include "circt/Dialect/Comb/CombPasses.h"
 #include "circt/Dialect/HW/HWOps.h"
 #include "mlir/IR/Builders.h"
-#include "mlir/IR/Matchers.h"
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/StringMap.h"
@@ -84,46 +81,23 @@ namespace {
 // Operand extension analysis
 //===----------------------------------------------------------------------===//
 
-/// How an operand's `live` low bits extend to the full result width: the bits
-/// at or above `live` are all constant 0 (zero extension) or all copies of bit
-/// `live - 1` (sign extension). The Lean flow models the operand accordingly
-/// and never puts the extension bits in the heap as independent bits.
+/// How many of an operand's low bits are its real ("live") bits: the bits at
+/// or above `live` are all constant 0. The Lean flow models the operand
+/// accordingly and never puts those extension bits in the heap as independent
+/// bits.
 struct OperandSpec {
   unsigned live;
-  bool isSigned;
 
-  /// The protocol token for this operand: `<live>` or `<live>s`.
-  std::string token() const {
-    return std::to_string(live) + (isSigned ? "s" : "");
-  }
+  /// The protocol token for this operand: `<live>`.
+  std::string token() const { return std::to_string(live); }
 };
 
-/// Determine the extension shape of `operand`, an operand of a `width`-bit op.
-///
+/// Determine the live width of `operand`, an operand of a `width`-bit op.
 /// Zero extension shows up in the known-bits lattice as leading known-zero
-/// bits. Sign extension has no known bits at all, but comb spells it
-/// structurally as
-///
-///   %sign = comb.extract %x from <n-1> : (i<n>) -> i1
-///   %ext  = comb.replicate %sign : (i1) -> i<width-n>
-///   %res  = comb.concat %ext, %x : i<width-n>, i<n>
-///
-/// (with the `comb.replicate` absent when only a single bit is added), which
-/// `comb::m_Sext` matches.
+/// bits.
 static OperandSpec computeOperandSpec(Value operand, unsigned width) {
   KnownBits known = comb::computeKnownBits(operand);
-  OperandSpec spec{width - known.Zero.countLeadingOnes(), /*isSigned=*/false};
-
-  Value base;
-  if (mlir::matchPattern(operand, comb::m_Sext(mlir::matchers::m_Any(&base)))) {
-    unsigned signedLive = base.getType().getIntOrFloatBitWidth();
-    // A zero-extended operand contributes nothing above its live width, while
-    // a sign-extended one still replicates its sign bit into every column, so
-    // zero extension wins whenever it is at least as tight.
-    if (signedLive > 0 && signedLive < spec.live)
-      spec = {signedLive, /*isSigned=*/true};
-  }
-  return spec;
+  return OperandSpec{width - known.Zero.countLeadingOnes()};
 }
 
 //===----------------------------------------------------------------------===//
@@ -245,9 +219,7 @@ private:
     const Node &node = nodes[n];
     switch (node.kind) {
     case Node::Kind::Leaf:
-      // A sign-extended operand replicates its sign bit into every column
-      // above its live width, so it fills the full width either way.
-      return specs[node.leaf].isSigned ? width : specs[node.leaf].live;
+      return specs[node.leaf].live;
     case Node::Kind::Add: {
       uint64_t sum = 0;
       for (unsigned kid : node.kids)
@@ -356,8 +328,8 @@ static FailureOr<NetlistRef> parseRef(StringRef token, unsigned width,
   unsigned index;
   if (token.consume_front("b")) {
     // Input bits must address a live bit of an existing operand: bits at or
-    // above an operand's live width are a constant 0 or a copy of the sign
-    // bit, and a valid netlist references neither directly.
+    // above an operand's live width are constant 0, and a valid netlist never
+    // references them.
     if (token.getAsInteger(10, index) || index / width >= specs.size() ||
         index % width >= specs[index / width].live)
       return failure();
@@ -642,10 +614,9 @@ void VerifiedDatapathPass::runOnOperation() {
     unsigned width = op->getResult(0).getType().getIntOrFloatBitWidth();
 
     // A leaf's live width excludes its extension bits — the leading
-    // known-zero bits of a zero-extended value `concat(c0, x)`, or the
-    // replicated sign bit of a sign-extended one `concat(replicate(x[n-1]),
-    // x)`. The Lean flow then keeps those bits out of the bit heap as
-    // independent bits entirely, shrinking the compressor.
+    // known-zero bits of a zero-extended value `concat(c0, x)`. The Lean flow
+    // then keeps those bits out of the bit heap as independent bits entirely,
+    // shrinking the compressor.
     Expr expr = ExprBuilder(width, /*allowAbsorb=*/true).build(op);
     // Fusing an expression is what lets an addend share the multiply's
     // compressor tree, but each multiply it pulls in multiplies the heap out,
