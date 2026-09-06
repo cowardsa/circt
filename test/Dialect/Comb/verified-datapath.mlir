@@ -1,4 +1,5 @@
 // RUN: circt-opt --comb-verified-datapath="lean-exe=/home/oy229/datapath-verification/.lake/build/bin/datapath-cli" %s | FileCheck %s
+// RUN: circt-opt --comb-verified-datapath="lean-exe=/home/oy229/datapath-verification/.lake/build/bin/datapath-cli max-heap-bits=8" %s | FileCheck %s --check-prefix=BUDGET
 
 
 // `datapath-cli mul 3 3 3` performs the Dadda compression of the 3-bit
@@ -180,4 +181,89 @@ hw.module @sext_of_zext_prefers_zext(in %a : i5, in %b : i5, out out : i10) {
   %bx = comb.concat %sb, %bv : i1, i9
   %0 = comb.mul %ax, %bx : i10
   hw.output %0 : i10
+}
+
+// A fused multiply-add is one expression, so `c` joins the multiply's partial
+// products in a single bit heap and a single compressor tree: `expr 3 3 add2
+// mul 0.3 1.3 2.3`. Lowering the multiply on its own would instead leave `+ c`
+// behind as a second adder, which costs delay and leaves arithmetic behind at
+// the proof boundary.
+// CHECK-LABEL: hw.module @fma
+hw.module @fma(in %a : i3, in %b : i3, in %c : i3, out out : i3) {
+  // The addend's bits are extracted, so they are in the heap...
+  // CHECK-DAG: comb.extract %c from 0 : (i3) -> i1
+  // CHECK-DAG: comb.extract %c from 1 : (i3) -> i1
+  // CHECK-DAG: comb.extract %c from 2 : (i3) -> i1
+  // ...and exactly one adder is left, the final carry-propagate adder.
+  // CHECK: %[[SUM:.+]] = comb.add bin %{{.+}}, %{{.+}} : i3
+  // CHECK-NEXT: hw.output %[[SUM]] : i3
+  %0 = comb.mul %a, %b : i3
+  %1 = comb.add %0, %c : i3
+  hw.output %1 : i3
+}
+
+// A dot product fuses both multiplies and the addend into one heap.
+// CHECK-LABEL: hw.module @dot_product
+hw.module @dot_product(in %a : i3, in %b : i3, in %c : i3, in %d : i3, out out : i3) {
+  // CHECK: %[[SUM:.+]] = comb.add bin %{{.+}}, %{{.+}} : i3
+  // CHECK-NEXT: hw.output %[[SUM]] : i3
+  %0 = comb.mul %a, %b : i3
+  %1 = comb.mul %c, %d : i3
+  %2 = comb.add %0, %1 : i3
+  hw.output %2 : i3
+}
+
+// A subtracted addend joins the heap too: `comb.sub` is rewritten as
+// `add(lhs, ~rhs, 1)` first, so a signed fused multiply-add — which reaches
+// the pass as a subtraction — fuses like the unsigned one, carry-in included.
+// CHECK-LABEL: hw.module @sub_fma
+hw.module @sub_fma(in %a : i3, in %b : i3, in %c : i3, out out : i3) {
+  // CHECK-NOT: comb.sub
+  // CHECK: %[[SUM:.+]] = comb.add bin %{{.+}}, %{{.+}} : i3
+  // CHECK-NEXT: hw.output %[[SUM]] : i3
+  %0 = comb.mul %a, %b : i3
+  %1 = comb.sub %0, %c : i3
+  hw.output %1 : i3
+}
+
+// A multiply with more than one use is a leaf rather than being duplicated
+// into the heap of every expression that reads it, so it keeps its own
+// compressor tree and the addition stays a plain 2-input adder.
+// CHECK-LABEL: hw.module @shared_mul_not_absorbed
+hw.module @shared_mul_not_absorbed(in %a : i3, in %b : i3, in %c : i3, out x : i3, out y : i3) {
+  // CHECK: %[[PROD:.+]] = comb.add bin %{{.+}}, %{{.+}} : i3
+  // CHECK-NEXT: %[[SUM:.+]] = comb.add %[[PROD]], %c : i3
+  // CHECK-NEXT: hw.output %[[PROD]], %[[SUM]] : i3, i3
+  %0 = comb.mul %a, %b : i3
+  %1 = comb.add %0, %c : i3
+  hw.output %0, %1 : i3, i3
+}
+
+// On its own, `add(a, b, 1)` is a carry-propagate adder with a carry-in, which
+// is cheaper than a compressor tree feeding one, so it is left untouched — as
+// the Datapath dialect's conversion also leaves it.
+// CHECK-LABEL: hw.module @carry_in_add_untouched
+hw.module @carry_in_add_untouched(in %a : i3, in %b : i3, out out : i3) {
+  // CHECK: comb.add %a, %b, %c1_i3 : i3
+  // CHECK-NOT: comb.extract
+  // CHECK: hw.output
+  %one = hw.constant 1 : i3
+  %0 = comb.add %a, %b, %one : i3
+  hw.output %0 : i3
+}
+
+// Each multiply an expression absorbs multiplies the heap out, so fusing stops
+// once the estimated heap exceeds the budget and the root is lowered on its
+// own instead. Here the fused heap would be 3*3 + 3 = 12 bits: over the budget,
+// so the multiply keeps its own compressor tree and the addition is left as a
+// 2-input adder — exactly what an unfused lowering gives, never worse.
+// BUDGET-LABEL: hw.module @over_budget
+hw.module @over_budget(in %a : i3, in %b : i3, in %c : i3, out out : i3) {
+  // BUDGET-NOT: comb.extract %c
+  // BUDGET: %[[PROD:.+]] = comb.add bin %{{.+}}, %{{.+}} : i3
+  // BUDGET-NEXT: %[[SUM:.+]] = comb.add %[[PROD]], %c : i3
+  // BUDGET-NEXT: hw.output %[[SUM]] : i3
+  %0 = comb.mul %a, %b : i3
+  %1 = comb.add %0, %c : i3
+  hw.output %1 : i3
 }
