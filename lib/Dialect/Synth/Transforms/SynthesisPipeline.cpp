@@ -118,6 +118,13 @@ void circt::synth::buildCombLoweringPipeline(
       // Lower variadic Mul into a binary op since the verified lowering only
       // handles two-input multiplies.
       pm.addPass(createLowerVariadicPass<comb::MulOp>(options.timingAware));
+      // Capture the front-end output before the verified pass consumes it.
+      // The Lean proof starts here, so everything between the input and this
+      // point -- the variadic split above and the canonicalisation before it
+      // -- is unproved and needs an equivalence check of its own.
+      if (!options.verifiedDatapathFrontendSnapshot.empty())
+        pm.addPass(std::make_unique<SnapshotIRPass>(
+            options.verifiedDatapathFrontendSnapshot));
       comb::VerifiedDatapathOptions verifiedOptions;
       verifiedOptions.leanExe = options.verifiedDatapathLeanExe;
       pm.addPass(comb::createVerifiedDatapath(verifiedOptions));

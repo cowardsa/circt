@@ -50,6 +50,14 @@ struct CombLoweringPipelineOptions
                      "This is the boundary the Lean proof covers, so it is the "
                      "reference for checking the rest of the pipeline"),
       llvm::cl::init("")};
+  PassOptions::Option<std::string> verifiedDatapathFrontendSnapshot{
+      *this, "verified-datapath-frontend-snapshot",
+      llvm::cl::desc("Write the IR to this file immediately before the "
+                     "verified lowering runs. Together with the input this "
+                     "bounds the front-end passes -- the n-ary mul split and "
+                     "the canonicalisation around it -- which sit outside the "
+                     "Lean proof and are otherwise unchecked"),
+      llvm::cl::init("")};
   PassOptions::Option<bool> timingAware{
       *this, "timing-aware",
       llvm::cl::desc("Lower operators in a timing-aware fashion"),
