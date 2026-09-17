@@ -58,12 +58,13 @@ createLowerVariadicPass(bool timingAware, bool reuseSubsets = false) {
 namespace {
 /// Writes the whole module to a file and changes nothing.
 ///
-/// Scheduled directly after the verified lowering so the file captures the
-/// exact circuit the Lean proof covers. Everything downstream of this point
-/// (CSE, canonicalisation, comb->AIG, mapping) is unverified, so this snapshot
-/// is the reference an equivalence check compares the final output against.
-/// Taking it inside the pipeline -- rather than replaying the early passes in
-/// a separate process -- means the two sides provably come from one run.
+/// Scheduled on either side of the datapath lowering so the files capture the
+/// exact circuits that bound it. An equivalence checker uses them as the cut
+/// points that split the pipeline into separately checkable segments: the
+/// front-end passes, the lowering itself, and the unverified tail (CSE,
+/// canonicalisation, comb->AIG, mapping). Taking them inside the pipeline --
+/// rather than replaying the early passes in a separate process -- means the
+/// two sides of every segment provably come from one run.
 struct SnapshotIRPass
     : public mlir::PassWrapper<SnapshotIRPass,
                                mlir::OperationPass<hw::HWModuleOp>> {
@@ -114,28 +115,46 @@ void circt::synth::buildCombLoweringPipeline(
   {
     // The verified lowering replaces the Datapath dialect flow, so it takes
     // priority over it when requested.
+    //
+    // Both arms are bracketed by the same two snapshots, taken at the same
+    // two points relative to the lowering: just before it, and just after it.
+    // That is what lets an equivalence check split the pipeline into three
+    // segments that mean the same thing whichever engine ran --
+    //
+    //   input -> frontend snapshot   the n-ary mul split and the
+    //                                canonicalisation around it
+    //   frontend -> datapath snapshot  the lowering itself
+    //   datapath snapshot -> output    everything downstream
+    //
+    // -- and so makes the two arms directly comparable. The verified arm
+    // discharges the middle segment with the Lean proof instead of a solver
+    // call; the Datapath dialect arm has to check it.
     if (options.verifiedDatapath) {
       // Lower variadic Mul into a binary op since the verified lowering only
       // handles two-input multiplies.
       pm.addPass(createLowerVariadicPass<comb::MulOp>(options.timingAware));
       // Capture the front-end output before the verified pass consumes it.
       // The Lean proof starts here, so everything between the input and this
-      // point -- the variadic split above and the canonicalisation before it
-      // -- is unproved and needs an equivalence check of its own.
-      if (!options.verifiedDatapathFrontendSnapshot.empty())
-        pm.addPass(std::make_unique<SnapshotIRPass>(
-            options.verifiedDatapathFrontendSnapshot));
+      // point is unproved and needs an equivalence check of its own.
+      if (!options.datapathFrontendSnapshot.empty())
+        pm.addPass(
+            std::make_unique<SnapshotIRPass>(options.datapathFrontendSnapshot));
       comb::VerifiedDatapathOptions verifiedOptions;
       verifiedOptions.leanExe = options.verifiedDatapathLeanExe;
       pm.addPass(comb::createVerifiedDatapath(verifiedOptions));
       // Capture the proof boundary before any unverified pass runs.
-      if (!options.verifiedDatapathSnapshot.empty())
-        pm.addPass(
-            std::make_unique<SnapshotIRPass>(options.verifiedDatapathSnapshot));
+      if (!options.datapathSnapshot.empty())
+        pm.addPass(std::make_unique<SnapshotIRPass>(options.datapathSnapshot));
       pm.addPass(createSimpleCanonicalizerPass());
     } else if (!options.disableDatapath) {
       // Lower variadic Mul into a binary op to enable datapath lowering.
       pm.addPass(createLowerVariadicPass<comb::MulOp>(options.timingAware));
+      // Same boundary as the verified arm above: the last point before the
+      // lowering, so the front-end segment is the identical obligation on
+      // both sides.
+      if (!options.datapathFrontendSnapshot.empty())
+        pm.addPass(
+            std::make_unique<SnapshotIRPass>(options.datapathFrontendSnapshot));
       pm.addPass(createConvertCombToDatapath());
       pm.addPass(createSimpleCanonicalizerPass());
       if (options.synthesisStrategy == OptimizationStrategyTiming)
@@ -143,6 +162,11 @@ void circt::synth::buildCombLoweringPipeline(
       circt::ConvertDatapathToCombOptions datapathOptions;
       datapathOptions.timingAware = options.timingAware;
       pm.addPass(createConvertDatapathToComb(datapathOptions));
+      // Nothing here is proved, so this snapshot is not a proof boundary --
+      // it is a seam that splits one end-to-end obligation into two smaller
+      // ones the solver has a far better chance of discharging.
+      if (!options.datapathSnapshot.empty())
+        pm.addPass(std::make_unique<SnapshotIRPass>(options.datapathSnapshot));
     }
     pm.addPass(createCSEPass());
     pm.addPass(createSimpleCanonicalizerPass());

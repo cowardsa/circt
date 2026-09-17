@@ -205,18 +205,19 @@ static cl::opt<std::string> verifiedDatapathLeanExe(
     cl::desc("Path to the datapath-cli executable used by --verified-datapath"),
     cl::init(""), cl::cat(mainCategory));
 
-static cl::opt<std::string> verifiedDatapathSnapshot(
-    "verified-datapath-snapshot",
-    cl::desc("Write the IR to this file immediately after the verified "
-             "lowering, before any unverified pass runs. Use it as the "
-             "reference when equivalence-checking the rest of the pipeline"),
+static cl::opt<std::string> datapathSnapshot(
+    "datapath-snapshot",
+    cl::desc("Write the IR to this file immediately after the datapath "
+             "lowering -- verified or not -- before any pass downstream of it "
+             "runs. Use it as the reference when equivalence-checking the "
+             "rest of the pipeline"),
     cl::init(""), cl::cat(mainCategory));
 
-static cl::opt<std::string> verifiedDatapathFrontendSnapshot(
-    "verified-datapath-frontend-snapshot",
-    cl::desc("Write the IR to this file immediately before the verified "
+static cl::opt<std::string> datapathFrontendSnapshot(
+    "datapath-frontend-snapshot",
+    cl::desc("Write the IR to this file immediately before the datapath "
              "lowering. Check it against the input to cover the front-end "
-             "passes, which the Lean proof does not"),
+             "passes, which no datapath engine covers"),
     cl::init(""), cl::cat(mainCategory));
 
 static cl::opt<bool> enableSOPBalancing("enable-sop-balancing",
@@ -298,9 +299,8 @@ static void populateCIRCTSynthPipeline(PassManager &pm) {
     loweringOptions.disableDatapath = disableDatapath;
     loweringOptions.verifiedDatapath = verifiedDatapath;
     loweringOptions.verifiedDatapathLeanExe = verifiedDatapathLeanExe;
-    loweringOptions.verifiedDatapathSnapshot = verifiedDatapathSnapshot;
-    loweringOptions.verifiedDatapathFrontendSnapshot =
-        verifiedDatapathFrontendSnapshot;
+    loweringOptions.datapathSnapshot = datapathSnapshot;
+    loweringOptions.datapathFrontendSnapshot = datapathFrontendSnapshot;
     loweringOptions.timingAware = !disableTimingAware;
     loweringOptions.synthesisStrategy = synthesisStrategy;
     circt::synth::buildCombLoweringPipeline(pm, loweringOptions);

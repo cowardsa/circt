@@ -43,20 +43,21 @@ struct CombLoweringPipelineOptions
       llvm::cl::desc("Path to the datapath-cli executable used by "
                      "verified-datapath"),
       llvm::cl::init("")};
-  PassOptions::Option<std::string> verifiedDatapathSnapshot{
-      *this, "verified-datapath-snapshot",
-      llvm::cl::desc("Write the IR to this file immediately after the verified "
-                     "lowering runs, before any unverified pass touches it. "
-                     "This is the boundary the Lean proof covers, so it is the "
-                     "reference for checking the rest of the pipeline"),
+  PassOptions::Option<std::string> datapathSnapshot{
+      *this, "datapath-snapshot",
+      llvm::cl::desc("Write the IR to this file immediately after the datapath "
+                     "lowering runs -- whichever engine is in use -- before "
+                     "any pass downstream of it touches the IR. This is the "
+                     "reference an equivalence check compares the final "
+                     "output against"),
       llvm::cl::init("")};
-  PassOptions::Option<std::string> verifiedDatapathFrontendSnapshot{
-      *this, "verified-datapath-frontend-snapshot",
+  PassOptions::Option<std::string> datapathFrontendSnapshot{
+      *this, "datapath-frontend-snapshot",
       llvm::cl::desc("Write the IR to this file immediately before the "
-                     "verified lowering runs. Together with the input this "
+                     "datapath lowering runs. Together with the input this "
                      "bounds the front-end passes -- the n-ary mul split and "
-                     "the canonicalisation around it -- which sit outside the "
-                     "Lean proof and are otherwise unchecked"),
+                     "the canonicalisation around it -- which no engine "
+                     "covers and which are otherwise unchecked"),
       llvm::cl::init("")};
   PassOptions::Option<bool> timingAware{
       *this, "timing-aware",
